@@ -43,7 +43,7 @@ export default function CompanyDetailPage() {
       const data = await apiFetch<CompanyDetail>(`/companies/${id}`);
       setDetail(data);
     } catch {
-      router.replace("/");
+      router.replace("/companies");
       return;
     } finally {
       setLoading(false);

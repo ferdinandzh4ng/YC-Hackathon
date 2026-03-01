@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python3:*)",
-      "Bash(echo no supabase cli:*)"
+      "Bash(echo no supabase cli:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.cloud.browser-use.com)"
     ]
   }
 }

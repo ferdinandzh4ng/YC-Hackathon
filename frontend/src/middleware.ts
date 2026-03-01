@@ -22,19 +22,26 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   const path = request.nextUrl.pathname;
   const isAuthPage = path === "/login" || path === "/signup";
-  if (!user && !isAuthPage) {
+  const isLanding = path === "/";
+  const isProtected = path.startsWith("/companies") || path.startsWith("/company/");
+  if (!user && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
   if (user && isAuthPage) {
     const url = request.nextUrl.clone();
-    url.pathname = "/";
+    url.pathname = "/companies";
+    return NextResponse.redirect(url);
+  }
+  if (user && isLanding) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/companies";
     return NextResponse.redirect(url);
   }
   return response;
 }
 
 export const config = {
-  matcher: ["/", "/company/:path*", "/login", "/signup"],
+  matcher: ["/", "/companies", "/company/:path*", "/login", "/signup"],
 };
