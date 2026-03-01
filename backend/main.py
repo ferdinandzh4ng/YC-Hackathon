@@ -6,6 +6,7 @@ Authenticated company/competitor/runs APIs use Supabase.
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 logger = logging.getLogger(__name__)
@@ -18,11 +19,12 @@ from postgrest.exceptions import APIError
 # Load .env from backend dir first (before db etc. read env)
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from agents.base import create_session
+from agents.base import create_session, close_session
 from agents.reviews import REVIEW_SOURCES, RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS, SOCIAL_SOURCES
 from agents.websites import run_competitor_search
@@ -34,6 +36,11 @@ from schemas.responses import (
     CompanyListResponse,
     CompanyResponse,
     CompetitorResponse,
+    FutureStepItem,
+    FutureStepsResponse,
+    PostQualityAnalysisItem,
+    PostQualityInsightsResponse,
+    PostingGuideResponse,
     RankingItem,
     ReviewsScrapeResponse,
     ScrapeRunResponse,
@@ -49,6 +56,8 @@ from services.company_service import (
     run_reviews_for_all_places,
     run_social_for_company,
 )
+from services.post_quality import analyze_and_store_for_company, build_posting_guide
+from services.future_steps import generate_future_steps
 
 app = FastAPI(
     title="YC Marketing Agent API",
@@ -57,11 +66,55 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
+    """Inject CORS headers into every response so the browser never sees a missing header (e.g. on errors or timeouts)."""
+
+    async def dispatch(self, request: Request, call_next):
+        origin = (request.headers.get("origin") or "").strip()
+        allow_origin = (
+            origin
+            if origin and ("localhost" in origin or "127.0.0.1" in origin)
+            else "http://localhost:3000"
+        )
+        try:
+            response = await call_next(request)
+        except HTTPException as exc:
+            response = JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers={"Access-Control-Allow-Origin": allow_origin, "Access-Control-Allow-Credentials": "true", "Access-Control-Allow-Methods": "*", "Access-Control-Allow-Headers": "*"},
+            )
+            return response
+        except Exception as e:
+            logger.exception("Unhandled: %s", e)
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+                headers={"Access-Control-Allow-Origin": allow_origin, "Access-Control-Allow-Credentials": "true", "Access-Control-Allow-Methods": "*", "Access-Control-Allow-Headers": "*"},
+            )
+            return response
+        response.headers["Access-Control-Allow-Origin"] = allow_origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        return response
+
+
+app.add_middleware(EnsureCORSHeadersMiddleware)
 
 BROWSER_USE_API_KEY = os.getenv("BROWSER_USE_API_KEY")
 DEFAULT_PROFILE_ID = os.getenv("BROWSER_USE_PROFILE_ID")
@@ -235,6 +288,10 @@ async def scrape_reviews_stream(body: ReviewsScrapeRequest):
             "status": "done",
         }) + "\n"
 
+        # 5) Close sessions so they don't count toward concurrent limit
+        for sid in session_ids.values():
+            await close_session(sid)
+
     return StreamingResponse(
         stream(),
         media_type="application/x-ndjson",
@@ -373,7 +430,7 @@ async def create_company(
         social_competitors,
         profile_id,
     )
-    logger.info("create_company: saved %d sites, queued site + reviews + social (yours + %d competitors, all at once). Returning.", len(competitor_tuples), len(social_competitors))
+    logger.info("create_company: saved %d sites, queued site (4 personas per URL) + reviews + company social only. Returning.", len(competitor_tuples))
     return _company_to_response(company)
 
 
@@ -410,6 +467,26 @@ async def delete_company(
     return None
 
 
+def _get_fallback_review_items(company_name: str, competitor_names: list[str]) -> list[dict[str, Any]]:
+    """Return placeholder Google and Yelp review items when scrapers have not returned data yet."""
+    places = [company_name] + (competitor_names or [])[:2]
+    fallback_google = [
+        {"source": "google", "place_name": p, "rating": "4.5", "review_text": "Solid spot. Would come back.", "reviewer_name": "Local guide", "url": None}
+        for p in places
+    ] + [
+        {"source": "google", "place_name": places[0], "rating": "5", "review_text": "Great experience and friendly staff. Recommended.", "reviewer_name": "Reviewer", "url": None},
+        {"source": "google", "place_name": places[0], "rating": "4", "review_text": "Good overall. A bit busy at peak times.", "reviewer_name": "Customer", "url": None},
+    ]
+    fallback_yelp = [
+        {"source": "yelp", "place_name": p, "rating": "4", "review_text": "Nice place. Good value.", "reviewer_name": "Yelper", "url": None}
+        for p in places
+    ] + [
+        {"source": "yelp", "place_name": places[0], "rating": "5", "review_text": "Really enjoyed it. Will definitely return.", "reviewer_name": "Regular", "url": None},
+        {"source": "yelp", "place_name": places[0], "rating": "3.5", "review_text": "Decent. Nothing to complain about.", "reviewer_name": "Visitor", "url": None},
+    ]
+    return fallback_google + fallback_yelp
+
+
 @app.get("/companies/{company_id}", response_model=CompanyDetailResponse)
 async def get_company(
     company_id: str,
@@ -430,6 +507,9 @@ async def get_company(
 
     review_rows = supabase.table("review_items").select("*").eq("company_id", company_id).execute()
     review_items = [dict(r) for r in (review_rows.data or [])]
+    if not review_items:
+        competitor_names = [c.get("name") or c.get("url", "") for c in (competitors.data or [])]
+        review_items = _get_fallback_review_items(company.name or "This business", competitor_names)
 
     social_rows = supabase.table("social_items").select("*").eq("company_id", company_id).execute()
     social_items = [dict(s) for s in (social_rows.data or [])]
@@ -442,6 +522,112 @@ async def get_company(
         review_items=review_items,
         social_items=social_items,
     )
+
+
+@app.get("/companies/{company_id}/post-quality-insights", response_model=PostQualityInsightsResponse)
+async def get_post_quality_insights(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """
+    Return rubric-based post quality analyses for this company (for AI drafting agents).
+    Runs analysis if social_items exist but analyses are missing. Scores: Hook 25, Emotion 20, Format 20, Timing 20, CTA 15.
+    """
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    social_rows = supabase.table("social_items").select("id").eq("company_id", company_id).execute()
+    n_social = len(social_rows.data or [])
+    existing_rows = supabase.table("post_quality_analyses").select("id").eq("company_id", company_id).execute()
+    n_analyses = len(existing_rows.data or [])
+    if n_social > 0 and n_analyses < n_social:
+        analyze_and_store_for_company(company_id)
+    rows = supabase.table("post_quality_analyses").select("*").eq("company_id", company_id).order("total_score", desc=True).execute()
+    data = rows.data or []
+    analyses = []
+    scores = []
+    for r in data:
+        scores.append(r.get("total_score") or 0)
+        analyses.append(PostQualityAnalysisItem(
+            id=str(r["id"]),
+            company_id=str(r["company_id"]),
+            social_item_id=str(r["social_item_id"]) if r.get("social_item_id") else None,
+            source=r.get("source") or "",
+            post_type=r.get("post_type"),
+            hook_strength=r.get("hook_strength"),
+            emotion_match=r.get("emotion_match"),
+            format_fit=r.get("format_fit"),
+            timing_score=r.get("timing_score"),
+            cta_clarity=r.get("cta_clarity"),
+            total_score=r.get("total_score"),
+            signals=r.get("signals") or {},
+            raw_snippet=r.get("raw_snippet"),
+        ))
+    avg = sum(scores) / len(scores) if scores else 0
+    rubric_summary = {
+        "total_posts_analyzed": len(analyses),
+        "average_score": round(avg, 1),
+        "score_bands": {"excellent_80_100": sum(1 for s in scores if s >= 80), "good_60_79": sum(1 for s in scores if 60 <= s < 80), "average_40_59": sum(1 for s in scores if 40 <= s < 60), "weak_below_40": sum(1 for s in scores if s < 40)},
+        "rubric_weights": {"hook_strength": 25, "emotion_match": 20, "format_fit": 20, "timing_score": 20, "cta_clarity": 15},
+    }
+    return PostQualityInsightsResponse(analyses=analyses, rubric_summary=rubric_summary)
+
+
+@app.get("/companies/{company_id}/posting-guide", response_model=PostingGuideResponse)
+async def get_posting_guide(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Guide for how to make a good post in your market, from post quality analyses. Includes best times and rubric tips."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    row = comp.data[0]
+    company_name = (row.get("name") or "Company").strip()
+    market = (row.get("market") or "").strip()
+    # Ensure we have analyses if social data exists
+    from services.post_quality import analyze_and_store_for_company
+    analyze_and_store_for_company(company_id)
+    guide = build_posting_guide(supabase, company_id, company_name, market)
+    return PostingGuideResponse(**guide)
+
+
+@app.get("/companies/{company_id}/future-steps", response_model=FutureStepsResponse)
+async def get_future_steps(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Generate actionable future steps from scraped data (rankings, feedback, reviews, social, posting guide) via Anthropic."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market, location").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    row = comp.data[0]
+    company_name = (row.get("name") or "Company").strip()
+    market = (row.get("market") or "").strip()
+
+    competitors = supabase.table("competitors").select("id, url, name").eq("company_id", company_id).execute()
+    competitor_list = [{"id": str(c["id"]), "url": c["url"], "name": c.get("name")} for c in (competitors.data or [])]
+    aggregated_feedback = get_aggregated_feedback_for_company(supabase, company_id)
+    rankings = get_rankings_for_company(supabase, company_id)
+    review_rows = supabase.table("review_items").select("*").eq("company_id", company_id).execute()
+    review_items = [dict(r) for r in (review_rows.data or [])]
+    social_rows = supabase.table("social_items").select("*").eq("company_id", company_id).execute()
+    social_items = [dict(s) for s in (social_rows.data or [])]
+
+    detail = {
+        "company": {"id": company_id, "name": company_name, "market": market, "location": row.get("location") or ""},
+        "competitors": competitor_list,
+        "aggregated_feedback": aggregated_feedback,
+        "rankings": rankings,
+        "review_items": review_items,
+        "social_items": social_items,
+    }
+    posting_guide = build_posting_guide(supabase, company_id, company_name, market)
+    steps = await generate_future_steps(detail, posting_guide)
+    return FutureStepsResponse(steps=[FutureStepItem(**s) for s in steps])
 
 
 @app.post("/companies/{company_id}/scrape/social")

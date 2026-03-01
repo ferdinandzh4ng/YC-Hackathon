@@ -21,8 +21,8 @@ class ReviewResults(BaseModel):
 
 # ----- Google Reviews -----
 
-GOOGLE_TASK_TEMPLATE = """Go to Google Maps and search for "{query}" in "{location}".
-Find and open ONLY the listing for this specific business: "{query}". Do NOT open or collect reviews from any other business or place.
+GOOGLE_TASK_TEMPLATE = """Go to Google Maps and search for "{query}".
+Find and open ONLY the listing for this specific business: "{query}". Do NOT open or collect reviews from any other business or place. IF THERE ARE MULTIPLE JUST USE THE FIRST ONE!
 Extract reviews ONLY from that single company's Google Maps listing. Include a balanced mix: positive (4–5 stars), negative or critical (1–2 stars), and neutral/mixed (3 stars).
 For each review, record: place name (use "{query}"), rating, review text, reviewer name, and the URL to that place on Google Maps.
 Return up to 15 reviews, all from this one company only."""

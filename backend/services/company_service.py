@@ -12,11 +12,12 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from agents.base import create_session
+from agents.base import create_session, close_session
 from agents.reviews import RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
 from db import get_supabase_admin
+from services.post_quality import analyze_and_store_for_company
 
 SOCIAL_SOURCES_ORDERED = ["x", "instagram", "facebook"]
 REVIEW_SOURCES_ORDERED = ["google", "yelp"]
@@ -70,12 +71,12 @@ async def run_four_personas_for_competitor(
 
     async def run_one(run_id: str, persona_key: str) -> None:
         logger.info("run_four_personas: persona %s starting for %s", persona_key, url[:50])
-        session_id, live_url = await create_session(profile_id)
-        supabase.table("scrape_runs").update({
-            "live_url": live_url,
-        }).eq("id", run_id).execute()
-
+        session_id = None
         try:
+            session_id, live_url = await create_session(profile_id)
+            supabase.table("scrape_runs").update({
+                "live_url": live_url,
+            }).eq("id", run_id).execute()
             result, _ = await run_competitor_scrape_single_persona(
                 url, persona_key, profile_id=profile_id, session_id=session_id, live_url=live_url
             )
@@ -96,12 +97,18 @@ async def run_four_personas_for_competitor(
             }).eq("id", run_id).execute()
             logger.info("run_four_personas: persona %s done for %s", persona_key, url[:50])
         except Exception as e:
+            err_msg = str(e)
+            if "429" in err_msg or "Too many" in err_msg:
+                err_msg = "Too many concurrent sessions (429). Try again later."
             logger.warning("run_four_personas: persona %s failed for %s: %s", persona_key, url[:50], e)
             supabase.table("scrape_runs").update({
                 "status": "failed",
-                "error_message": str(e),
+                "error_message": err_msg[:500],
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
+        finally:
+            if session_id:
+                await close_session(session_id)
 
     await asyncio.gather(*[run_one(run_ids[i], persona_keys[i]) for i in range(4)])
     logger.info("run_four_personas: all 4 personas finished for %s", url[:60])
@@ -131,31 +138,32 @@ async def run_company_scrapes_parallel(
     social_competitors: list[tuple[str, str]],
     profile_id: str | None,
 ) -> None:
-    """Run site scrapes, reviews, our-company social, and per-competitor social all at the same time (parallel)."""
-    logger.info("run_company_scrapes_parallel: starting site + reviews + social (yours + %d competitors) for company_id=%s", len(social_competitors), company_id)
-    site_task = (
-        run_all_competitor_site_scrapes_parallel(company_id, competitor_tuples, profile_id)
-        if competitor_tuples
-        else asyncio.sleep(0)
-    )
-    social_competitors_task = (
-        run_social_for_all_competitors(company_id, social_competitors, location, profile_id)
-        if social_competitors
-        else asyncio.sleep(0)
-    )
-    review_places = [query] + [name for _cid, name in social_competitors]
-    reviews_task = (
-        run_reviews_for_all_places(company_id, review_places, location, profile_id)
-        if review_places
-        else asyncio.sleep(0)
-    )
-    await asyncio.gather(
-        site_task,
-        reviews_task,
-        run_social_for_company(company_id, query, location, profile_id),
-        social_competitors_task,
-    )
-    logger.info("run_company_scrapes_parallel: all done for company_id=%s", company_id)
+    """Run site scrapes (4 personas per competitor URL), reviews, and social once for the company only. Never raises."""
+    try:
+        logger.info("run_company_scrapes_parallel: starting site (4 personas per URL) + reviews + company social only for company_id=%s", company_id)
+        site_task = (
+            run_all_competitor_site_scrapes_parallel(company_id, competitor_tuples, profile_id)
+            if competitor_tuples
+            else asyncio.sleep(0)
+        )
+        review_places = [query] + [name for _cid, name in social_competitors]
+        reviews_task = (
+            run_reviews_for_all_places(company_id, review_places, location, profile_id)
+            if review_places
+            else asyncio.sleep(0)
+        )
+        await asyncio.gather(
+            site_task,
+            reviews_task,
+            run_social_for_company(company_id, query, location, profile_id),
+        )
+        logger.info("run_company_scrapes_parallel: all done for company_id=%s", company_id)
+        try:
+            analyze_and_store_for_company(company_id)
+        except Exception as e:
+            logger.warning("post_quality analysis failed for company_id=%s: %s", company_id, e)
+    except Exception as e:
+        logger.exception("run_company_scrapes_parallel failed for company_id=%s: %s", company_id, e)
 
 
 async def run_social_for_competitor(
@@ -182,9 +190,10 @@ async def run_social_for_competitor(
 
     async def run_one(run_id: str, source: str) -> None:
         logger.info("run_social_for_competitor: %s starting for %s", source, query[:50])
-        session_id, live_url = await create_session(profile_id)
-        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        session_id = None
         try:
+            session_id, live_url = await create_session(profile_id)
+            supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
             runner = SOCIAL_RUNNERS[source]
             out, _ = await runner(
                 query, location=location,
@@ -207,12 +216,18 @@ async def run_social_for_competitor(
             }).eq("id", run_id).execute()
             logger.info("run_social_for_competitor: %s done for %s", source, query[:50])
         except Exception as e:
+            err_msg = str(e)
+            if "429" in err_msg or "Too many" in err_msg:
+                err_msg = "Too many concurrent sessions (429). Try again later."
             logger.warning("run_social_for_competitor: %s failed for %s: %s", source, query[:50], e)
             supabase.table("scrape_runs").update({
                 "status": "failed",
-                "error_message": str(e),
+                "error_message": err_msg[:500],
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
+        finally:
+            if session_id:
+                await close_session(session_id)
 
     await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(n_social)])
     logger.info("run_social_for_competitor: all %d social sources finished for %s", n_social, query[:50])
@@ -256,9 +271,10 @@ async def run_social_for_company(
 
     async def run_one(run_id: str, source: str) -> None:
         logger.info("run_social_for_company: %s starting for company_id=%s", source, company_id)
-        session_id, live_url = await create_session(profile_id)
-        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        session_id = None
         try:
+            session_id, live_url = await create_session(profile_id)
+            supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
             runner = SOCIAL_RUNNERS[source]
             out, _ = await runner(
                 query, location=location,
@@ -280,12 +296,18 @@ async def run_social_for_company(
             }).eq("id", run_id).execute()
             logger.info("run_social_for_company: %s done for company_id=%s", source, company_id)
         except Exception as e:
+            err_msg = str(e)
+            if "429" in err_msg or "Too many" in err_msg:
+                err_msg = "Too many concurrent sessions (429). Try again later."
             logger.warning("run_social_for_company: %s failed for company_id=%s: %s", source, company_id, e)
             supabase.table("scrape_runs").update({
                 "status": "failed",
-                "error_message": str(e),
+                "error_message": err_msg[:500],
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
+        finally:
+            if session_id:
+                await close_session(session_id)
 
     await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(n_social)])
     logger.info("run_social_for_company: all %d social sources finished for company_id=%s", n_social, company_id)
@@ -311,9 +333,10 @@ async def run_reviews_for_place(
 
     async def run_one(run_id: str, source: str) -> None:
         logger.info("run_reviews_for_place: %s starting for %s", source, place_query[:50])
-        session_id, live_url = await create_session(profile_id)
-        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        session_id = None
         try:
+            session_id, live_url = await create_session(profile_id)
+            supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
             runner = REVIEW_RUNNERS[source]
             out, _ = await runner(
                 place_query, location=location,
@@ -336,12 +359,18 @@ async def run_reviews_for_place(
             }).eq("id", run_id).execute()
             logger.info("run_reviews_for_place: %s done for %s", source, place_query[:50])
         except Exception as e:
+            err_msg = str(e)
+            if "429" in err_msg or "Too many" in err_msg:
+                err_msg = "Too many concurrent sessions (429). Try again later."
             logger.warning("run_reviews_for_place: %s failed for %s: %s", source, place_query[:50], e)
             supabase.table("scrape_runs").update({
                 "status": "failed",
-                "error_message": str(e),
+                "error_message": err_msg[:500],
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
+        finally:
+            if session_id:
+                await close_session(session_id)
 
     await asyncio.gather(*[run_one(run_ids[i], REVIEW_SOURCES_ORDERED[i]) for i in range(2)])
     logger.info("run_reviews_for_place: Google + Yelp finished for %s", place_query[:50])

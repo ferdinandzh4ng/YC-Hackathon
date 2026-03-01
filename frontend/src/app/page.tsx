@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -188,10 +189,9 @@ export default function CompaniesPage() {
                 transition={{ delay: 0.08 + index * 0.06, duration: 0.4 }}
                 className="relative"
               >
-                <button
-                  type="button"
-                  onClick={() => router.push(`/company/${company.id}`)}
-                  className="w-full text-left bg-white rounded-xl border border-zinc-200 p-5 hover:border-zinc-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-all duration-300 group"
+                <Link
+                  href={`/company/${company.id}`}
+                  className="block w-full text-left bg-white rounded-xl border border-zinc-200 p-5 pr-12 hover:border-zinc-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-all duration-300 group"
                 >
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -227,14 +227,15 @@ export default function CompaniesPage() {
                       View details
                     </span>
                   </div>
-                </button>
+                </Link>
                 <button
                   type="button"
                   onClick={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     setDeleteTarget(company);
                   }}
-                  className="absolute top-3 right-3 w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors"
+                  className="absolute top-3 right-3 z-10 w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors"
                   title="Delete company"
                 >
                   <Trash2 size={14} />

@@ -7,6 +7,7 @@ import RankingTable from "@/components/RankingTable";
 import UXFeedbackCarousel, { UXFeedback } from "@/components/UXFeedbackCarousel";
 import FrequentReviewsCarousel, { CompanyReviews } from "@/components/FrequentReviewsCarousel";
 import type { AggregatedFeedback, RankingItem, ReviewItem, SocialItem } from "../lib/api";
+import { fetchPostingGuide, type PostingGuide } from "../lib/api";
 
 function aggregatedToUXFeedback(f: AggregatedFeedback): UXFeedback {
   const name = f.competitor_name || f.url || "Unknown";
@@ -130,21 +131,21 @@ function postsBySource(items: SocialItem[]): { source: string; label: string; co
 }
 
 interface AnalyticsTabProps {
+  companyId?: string;
   rankings?: RankingItem[];
   aggregatedFeedback?: AggregatedFeedback[];
   reviewItems?: ReviewItem[];
   socialItems?: SocialItem[];
   companyName?: string;
-  onSwitchToSocial?: () => void;
 }
 
 export default function AnalyticsTab({
+  companyId,
   rankings = [],
   aggregatedFeedback = [],
   reviewItems = [],
   socialItems = [],
   companyName = "",
-  onSwitchToSocial,
 }: AnalyticsTabProps) {
   const socialSourceRows = postsBySource(socialItems);
   const samplePosts = socialItems.slice(0, 8);
@@ -180,6 +181,21 @@ export default function AnalyticsTab({
     const t = setTimeout(checkScroll, 100);
     return () => clearTimeout(t);
   }, [samplePosts.length, checkScroll]);
+
+  const [postingGuide, setPostingGuide] = useState<PostingGuide | null>(null);
+  const [postingGuideLoading, setPostingGuideLoading] = useState(false);
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setPostingGuideLoading(true);
+    fetchPostingGuide(companyId).then((guide) => {
+      if (!cancelled) {
+        setPostingGuide(guide ?? null);
+      }
+      setPostingGuideLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [companyId]);
 
   const uxFeedback: UXFeedback[] = aggregatedFeedback.length > 0
     ? aggregatedFeedback.map(aggregatedToUXFeedback)
@@ -275,24 +291,13 @@ export default function AnalyticsTab({
         transition={{ delay: 0.2, duration: 0.4 }}
         className="mt-12"
       >
-        <div className="flex items-center justify-between gap-4 mb-6">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-md bg-zinc-200 flex items-center justify-center">
-              <Share2 size={13} className="text-zinc-600" />
-            </div>
-            <h2 className="text-[15px] font-semibold text-zinc-900">
-              Social media
-            </h2>
+        <div className="flex items-center gap-2.5 mb-6">
+          <div className="w-6 h-6 rounded-md bg-zinc-200 flex items-center justify-center">
+            <Share2 size={13} className="text-zinc-600" />
           </div>
-          {onSwitchToSocial && (
-            <button
-              type="button"
-              onClick={onSwitchToSocial}
-              className="px-3 py-2 rounded-lg border border-zinc-200 bg-white text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 transition-colors"
-            >
-              View Social tab
-            </button>
-          )}
+          <h2 className="text-[15px] font-semibold text-zinc-900">
+            Social media
+          </h2>
         </div>
 
         <div className="grid grid-cols-10 gap-5">
@@ -314,7 +319,7 @@ export default function AnalyticsTab({
               <div className="overflow-y-auto">
                 {socialSourceRows.length === 0 ? (
                   <div className="px-6 py-8 text-center text-[13px] text-zinc-500">
-                    No posts yet. Run social scrapers from the Social tab.
+                    No posts yet. Run social scrapers from the Scrapers tab.
                   </div>
                 ) : (
                   <table className="w-full">
@@ -352,7 +357,7 @@ export default function AnalyticsTab({
                 Sample posts
               </p>
               {samplePosts.length === 0 ? (
-                <p className="text-[13px] text-zinc-500 py-5">No posts yet. Run social scrapers from the Social tab.</p>
+                <p className="text-[13px] text-zinc-500 py-5">No posts yet. Run social scrapers from the Scrapers tab.</p>
               ) : (
                 <div className="relative">
                   {samplePosts.length > 1 && (
@@ -422,10 +427,6 @@ export default function AnalyticsTab({
           </div>
         </div>
 
-        <p className="mt-3 text-[12px] text-zinc-500">
-          View the Social tab to see all posts and run or watch agents.
-        </p>
-
         {socialItems.length > 0 && (
           <div className="mt-6">
             <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider mb-3">
@@ -442,6 +443,57 @@ export default function AnalyticsTab({
             </div>
           </div>
         )}
+
+        <div className="mt-8">
+          <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider mb-3">
+            How to make a good post in your market
+          </p>
+          <div className="bg-white rounded-xl border border-zinc-200 overflow-hidden">
+            {postingGuideLoading ? (
+              <div className="px-6 py-8 text-center text-[13px] text-zinc-500">
+                Loading guide…
+              </div>
+            ) : postingGuide && postingGuide.total_posts_analyzed > 0 ? (
+              <div className="p-6 space-y-5">
+                <p className="text-[13px] text-zinc-600">
+                  Based on {postingGuide.total_posts_analyzed} analyzed posts in <strong>{postingGuide.market}</strong> (avg score {postingGuide.average_score.toFixed(1)}/10).
+                </p>
+                {postingGuide.best_times && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Best times to post</p>
+                    <p className="text-[13px] text-zinc-800">{postingGuide.best_times}</p>
+                  </div>
+                )}
+                {postingGuide.best_post_types.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Best post types</p>
+                    <p className="text-[13px] text-zinc-800">{postingGuide.best_post_types.join(", ")}</p>
+                  </div>
+                )}
+                {postingGuide.best_sources.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Best sources</p>
+                    <p className="text-[13px] text-zinc-800">{postingGuide.best_sources.join(", ")}</p>
+                  </div>
+                )}
+                {postingGuide.rubric_tips.length > 0 && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Tips from top posts</p>
+                    <ul className="list-disc list-inside text-[13px] text-zinc-800 space-y-1">
+                      {postingGuide.rubric_tips.map((tip, i) => (
+                        <li key={i}>{tip}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="px-6 py-6 text-[13px] text-zinc-500">
+                Run social scrapers and analyze posts to see a data-driven guide for your market.
+              </div>
+            )}
+          </div>
+        </div>
       </motion.section>
     </div>
   );

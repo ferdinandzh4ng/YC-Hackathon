@@ -44,6 +44,19 @@ async def create_session(profile_id: str | None = None) -> tuple[str, str | None
     return session.id, live_url
 
 
+async def close_session(session_id: str) -> None:
+    """Stop/delete a Browser Use session so it no longer counts toward concurrent limits. No-op on failure."""
+    if not session_id:
+        return
+    try:
+        from browser_use_sdk import AsyncBrowserUse
+        client = AsyncBrowserUse()
+        await client.sessions.delete(session_id)
+        logger.debug("close_session: deleted session %s", session_id)
+    except Exception as e:
+        logger.warning("close_session: failed to delete session %s: %s", session_id, e)
+
+
 async def run_task(
     task: str,
     output_schema: type[T],

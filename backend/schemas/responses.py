@@ -83,3 +83,47 @@ class CompanyListResponse(BaseModel):
 class ScrapeRunsListResponse(BaseModel):
     runs: list[ScrapeRunResponse]
     agents_running_count: int
+
+
+class PostQualityAnalysisItem(BaseModel):
+    id: str
+    company_id: str
+    social_item_id: str | None
+    source: str
+    post_type: str | None
+    hook_strength: int | None
+    emotion_match: int | None
+    format_fit: int | None
+    timing_score: int | None
+    cta_clarity: int | None
+    total_score: int | None
+    signals: dict[str, Any] = Field(default_factory=dict)
+    raw_snippet: str | None
+
+
+class PostQualityInsightsResponse(BaseModel):
+    """Stored rubric scores per post (Hook, Emotion, Format, Timing, CTA)."""
+    analyses: list[PostQualityAnalysisItem]
+    rubric_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class PostingGuideResponse(BaseModel):
+    """Guide for how to make a good post in the user's market, derived from post_quality_analyses."""
+    company_name: str = ""
+    market: str = ""
+    total_posts_analyzed: int = 0
+    best_post_types: list[str] = Field(default_factory=list, description="Post types that score best in your market")
+    best_sources: list[str] = Field(default_factory=list, description="Platforms where your content scores highest")
+    rubric_tips: list[str] = Field(default_factory=list, description="What works: hook, CTA, etc.")
+    best_times: str = Field(default="", description="Recommended posting times")
+    average_score: float = 0.0
+
+
+class FutureStepItem(BaseModel):
+    title: str = ""
+    description: str = ""
+    evidence: list[str] = Field(default_factory=list, description="Quotes or facts from scraped data supporting this step")
+
+
+class FutureStepsResponse(BaseModel):
+    steps: list[FutureStepItem] = Field(default_factory=list)

@@ -3,19 +3,22 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { BarChart3, Clock, Users, Loader2, Trash2 } from "lucide-react";
+import { BarChart3, Clock, Users, Loader2, Trash2, FileDown } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import AnalyticsTab from "@/components/AnalyticsTab";
 import ScrapersTab from "@/components/ScrapersTab";
-import SocialPostQualityTab from "@/components/SocialPostQualityTab";
+import FutureStepsTab from "@/components/FutureStepsTab";
 import {
   apiFetch,
   deleteCompany,
+  fetchPostingGuide,
+  fetchFutureSteps,
   type CompanyDetail,
   type ScrapeRunsResponse,
 } from "../../../lib/api";
+import { exportCompanyReportPdf } from "../../../lib/exportPdf";
 
-type Tab = "analytics" | "scrapers" | "social";
+type Tab = "analytics" | "scrapers" | "future-steps";
 
 export default function CompanyDetailPage() {
   const params = useParams();
@@ -27,13 +30,14 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const agentsRunningRef = useRef(0);
   const tabParam = searchParams.get("tab");
   const [activeTab, setActiveTab] = useState<Tab>(
-    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "social" ? "social" : "analytics")
+    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "future-steps" ? "future-steps" : "analytics")
   );
   useEffect(() => {
-    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "social") setActiveTab(tabParam);
+    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "future-steps") setActiveTab(tabParam);
   }, [tabParam]);
 
   const loadDetail = useCallback(async () => {
@@ -72,15 +76,18 @@ export default function CompanyDetailPage() {
   }, [loadRuns]);
 
   useEffect(() => {
-    const running = runs?.agents_running_count ?? 0;
+    const runsList = runs?.runs ?? [];
+    const nonSocialRunning = runsList.filter(
+      (r) => r.status === "running" && r.type !== "social"
+    ).length;
     const prev = agentsRunningRef.current;
-    agentsRunningRef.current = running;
-    if (prev > 0 && running === 0 && id) {
+    agentsRunningRef.current = nonSocialRunning;
+    if (prev > 0 && nonSocialRunning === 0 && id) {
       loadDetail();
       setActiveTab("analytics");
       router.replace(`/company/${id}?tab=analytics`);
     }
-  }, [runs?.agents_running_count, id, router, loadDetail]);
+  }, [runs?.runs, id, router, loadDetail]);
 
   if (loading || !detail) {
     return (
@@ -101,6 +108,20 @@ export default function CompanyDetailPage() {
       router.push("/");
     } catch {
       setDeleting(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!detail || exportingPdf) return;
+    setExportingPdf(true);
+    try {
+      const [guide, stepsRes] = await Promise.all([
+        fetchPostingGuide(id).catch(() => null),
+        fetchFutureSteps(id).catch(() => ({ steps: [] })),
+      ]);
+      exportCompanyReportPdf(detail, guide, stepsRes.steps ?? []);
+    } finally {
+      setExportingPdf(false);
     }
   };
 
@@ -155,14 +176,25 @@ export default function CompanyDetailPage() {
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setDeleteConfirmOpen(true)}
-              className="flex items-center gap-2 px-3 py-2 text-[13px] text-red-600 hover:bg-red-50 rounded-lg border border-red-200 hover:border-red-300 transition-colors"
-            >
-              <Trash2 size={14} />
-              Delete company
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportPdf}
+                disabled={exportingPdf}
+                className="flex items-center gap-2 px-3 py-2 text-[13px] text-zinc-700 hover:bg-zinc-100 rounded-lg border border-zinc-200 hover:border-zinc-300 transition-colors disabled:opacity-60"
+              >
+                {exportingPdf ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+                Export to PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmOpen(true)}
+                className="flex items-center gap-2 px-3 py-2 text-[13px] text-red-600 hover:bg-red-50 rounded-lg border border-red-200 hover:border-red-300 transition-colors"
+              >
+                <Trash2 size={14} />
+                Delete company
+              </button>
+            </div>
           </div>
 
           <AnimatePresence>
@@ -229,15 +261,12 @@ export default function CompanyDetailPage() {
             >
               {hasData ? (
                 <AnalyticsTab
+                  companyId={id}
                   rankings={detail.rankings}
                   aggregatedFeedback={detail.aggregated_feedback}
                   reviewItems={detail.review_items}
                   socialItems={detail.social_items}
                   companyName={company.name}
-                  onSwitchToSocial={() => {
-                    setActiveTab("social");
-                    router.replace(`/company/${id}?tab=social`);
-                  }}
                 />
               ) : (runs && runs.agents_running_count > 0) ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center">
@@ -278,7 +307,17 @@ export default function CompanyDetailPage() {
                 </div>
               )}
             </motion.div>
-          ) : activeTab === "scrapers" ? (
+          ) : activeTab === "future-steps" ? (
+            <motion.div
+              key="future-steps"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              <FutureStepsTab companyId={id} companyName={company.name} />
+            </motion.div>
+          ) : (
             <motion.div
               key="scrapers"
               initial={{ opacity: 0, y: 8 }}
@@ -290,31 +329,6 @@ export default function CompanyDetailPage() {
                 runs={runs?.runs ?? []}
                 agentsRunningCount={runs?.agents_running_count ?? 0}
                 competitors={detail.competitors}
-              />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="social"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}
-            >
-              <SocialPostQualityTab
-                socialItems={detail.social_items}
-                companyName={company.name}
-                companyId={company.id}
-                runs={runs?.runs ?? []}
-                onRefresh={() => {
-                  loadDetail();
-                  loadRuns();
-                }}
-                onSwitchToScrapers={() => {
-                  setActiveTab("scrapers");
-                  const next = new URLSearchParams(searchParams?.toString() ?? "");
-                  next.set("tab", "scrapers");
-                  router.replace(`/company/${id}?${next.toString()}`, { scroll: false });
-                }}
               />
             </motion.div>
           )}

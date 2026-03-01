@@ -126,6 +126,39 @@ export interface ScrapeRunsResponse {
   agents_running_count: number;
 }
 
+export interface PostingGuide {
+  company_name: string;
+  market: string;
+  total_posts_analyzed: number;
+  best_post_types: string[];
+  best_sources: string[];
+  rubric_tips: string[];
+  best_times: string;
+  average_score: number;
+}
+
+export async function fetchPostingGuide(companyId: string): Promise<PostingGuide | null> {
+  try {
+    return await apiFetch<PostingGuide>(`/companies/${companyId}/posting-guide`);
+  } catch {
+    return null;
+  }
+}
+
+export interface FutureStepItem {
+  title: string;
+  description: string;
+  evidence: string[];
+}
+
+export interface FutureStepsResponse {
+  steps: FutureStepItem[];
+}
+
+export async function fetchFutureSteps(companyId: string): Promise<FutureStepsResponse> {
+  return apiFetch<FutureStepsResponse>(`/companies/${companyId}/future-steps`);
+}
+
 export async function deleteCompany(id: string): Promise<void> {
   await apiFetch(`/companies/${id}`, { method: "DELETE" });
 }

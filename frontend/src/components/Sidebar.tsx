@@ -1,14 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { BarChart3, Bot, Share2, Settings, ArrowLeft } from "lucide-react";
+import { BarChart3, Bot, Target, Settings, ArrowLeft } from "lucide-react";
 
 const tabs = [
   { icon: BarChart3, label: "Analytics", tab: "analytics" },
   { icon: Bot, label: "Scrapers", tab: "scrapers" },
-  { icon: Share2, label: "Social", tab: "social" },
+  { icon: Target, label: "Future steps", tab: "future-steps" },
 ];
 
 export default function Sidebar({
@@ -25,8 +24,9 @@ export default function Sidebar({
       transition={{ duration: 0.4, ease: "easeOut" }}
       className="fixed left-0 top-0 h-screen w-[220px] bg-white border-r border-zinc-200 flex flex-col z-50"
     >
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-zinc-100">
-        <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
+      <div className="flex items-center justify-between gap-2 px-5 py-5 border-b border-zinc-100">
+        <div className="flex items-center gap-3 min-w-0">
+        <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shrink-0">
           <svg
             width="16"
             height="16"
@@ -41,7 +41,8 @@ export default function Sidebar({
             <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" />
           </svg>
         </div>
-        <span className="text-base font-semibold tracking-tight">limitus</span>
+        <span className="text-base font-semibold tracking-tight truncate">limitus</span>
+        </div>
       </div>
 
       <Link
