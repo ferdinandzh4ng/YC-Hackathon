@@ -38,7 +38,7 @@ All responses include:
 ```json
 POST /scrape/social
 {
-  "sources": ["x", "reddit"],
+  "sources": ["x", "instagram", "facebook"],
   "query": "cake shops",
   "location": "San Francisco"
 }

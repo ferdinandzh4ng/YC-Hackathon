@@ -18,8 +18,9 @@ from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
 from db import get_supabase_admin
 
-SOCIAL_SOURCES_ORDERED = ["x", "instagram", "reddit"]
+SOCIAL_SOURCES_ORDERED = ["x", "instagram", "facebook"]
 REVIEW_SOURCES_ORDERED = ["google", "yelp"]
+
 
 DEFAULT_PROFILE_ID = os.getenv("BROWSER_USE_PROFILE_ID")
 
@@ -249,8 +250,8 @@ async def run_social_for_company(
     ]
     insert_result = supabase.table("scrape_runs").insert(rows).execute()
     run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
-    if len(run_ids) != n_social:
-        logger.warning("run_social_for_company: failed to create %d run rows for company_id=%s", n_social, company_id)
+    if len(run_ids) != len(SOCIAL_SOURCES_ORDERED):
+        logger.warning("run_social_for_company: failed to create run rows for company_id=%s", company_id)
         return
 
     async def run_one(run_id: str, source: str) -> None:
