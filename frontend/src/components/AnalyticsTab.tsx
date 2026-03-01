@@ -273,8 +273,9 @@ export default function AnalyticsTab({
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.4 }}
+        className="mt-12"
       >
-        <div className="flex items-center justify-between gap-4 mb-4">
+        <div className="flex items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-zinc-200 flex items-center justify-center">
               <Share2 size={13} className="text-zinc-600" />
@@ -302,7 +303,7 @@ export default function AnalyticsTab({
               transition={{ duration: 0.5, ease: "easeOut" }}
               className="bg-white rounded-xl border border-zinc-200 overflow-hidden h-full"
             >
-              <div className="px-5 py-4 border-b border-zinc-100">
+              <div className="px-6 py-5 border-b border-zinc-100">
                 <h3 className="text-[13px] font-semibold text-zinc-900">
                   Posts by source
                 </h3>
@@ -312,16 +313,16 @@ export default function AnalyticsTab({
               </div>
               <div className="overflow-y-auto">
                 {socialSourceRows.length === 0 ? (
-                  <div className="px-5 py-8 text-center text-[13px] text-zinc-500">
+                  <div className="px-6 py-8 text-center text-[13px] text-zinc-500">
                     No posts yet. Run social scrapers from the Social tab.
                   </div>
                 ) : (
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-zinc-100">
-                        <th className="text-left text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-5 py-2.5">#</th>
-                        <th className="text-left text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-5 py-2.5">Source</th>
-                        <th className="text-right text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-5 py-2.5">Count</th>
+                        <th className="text-left text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-6 py-3">#</th>
+                        <th className="text-left text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-6 py-3">Source</th>
+                        <th className="text-right text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-6 py-3">Count</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -333,9 +334,9 @@ export default function AnalyticsTab({
                           transition={{ delay: 0.15 + index * 0.05, duration: 0.35 }}
                           className="border-b border-zinc-50 last:border-0 hover:bg-zinc-50/70 transition-colors"
                         >
-                          <td className="px-5 py-3 text-[12px] text-zinc-500 font-mono w-10">{index + 1}</td>
-                          <td className="px-5 py-3 text-[13px] font-medium text-zinc-800">{row.label}</td>
-                          <td className="px-5 py-3 text-right text-[12px] font-semibold text-zinc-700">{row.count}</td>
+                          <td className="px-6 py-3 text-[12px] text-zinc-500 font-mono w-10">{index + 1}</td>
+                          <td className="px-6 py-3 text-[13px] font-medium text-zinc-800">{row.label}</td>
+                          <td className="px-6 py-3 text-right text-[12px] font-semibold text-zinc-700">{row.count}</td>
                         </motion.tr>
                       ))}
                     </tbody>
@@ -346,12 +347,12 @@ export default function AnalyticsTab({
           </div>
 
           <div className="col-span-5">
-            <div className="bg-zinc-50/50 rounded-xl border border-zinc-200/60 p-4 h-full">
+            <div className="bg-zinc-50/50 rounded-xl border border-zinc-200/60 p-5 h-full">
               <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider mb-1">
                 Sample posts
               </p>
               {samplePosts.length === 0 ? (
-                <p className="text-[13px] text-zinc-500 py-4">No posts yet. Run social scrapers from the Social tab.</p>
+                <p className="text-[13px] text-zinc-500 py-5">No posts yet. Run social scrapers from the Social tab.</p>
               ) : (
                 <div className="relative">
                   {samplePosts.length > 1 && (

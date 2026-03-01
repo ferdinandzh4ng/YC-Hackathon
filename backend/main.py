@@ -47,6 +47,7 @@ from services.company_service import (
     run_company_scrapes_parallel,
     run_four_personas_for_competitor,
     run_reviews_for_all_places,
+    run_social_for_company,
 )
 
 app = FastAPI(

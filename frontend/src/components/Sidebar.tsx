@@ -62,7 +62,7 @@ export default function Sidebar({
             <button
               key={item.tab}
               onClick={() => onTabChange?.(item.tab)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
+              className={`w-full flex items-center gap-4 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
                 isActive
                   ? "bg-zinc-100 text-black"
                   : "text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50"
@@ -76,7 +76,7 @@ export default function Sidebar({
       </nav>
 
       <div className="px-3 pb-5 border-t border-zinc-100 pt-3">
-        <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50 transition-all duration-200">
+        <button className="w-full flex items-center gap-4 px-3 py-2.5 rounded-lg text-[13px] font-medium text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50 transition-all duration-200">
           <Settings size={17} strokeWidth={1.8} />
           Settings
         </button>

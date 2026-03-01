@@ -232,6 +232,12 @@ export default function CompanyDetailPage() {
                   rankings={detail.rankings}
                   aggregatedFeedback={detail.aggregated_feedback}
                   reviewItems={detail.review_items}
+                  socialItems={detail.social_items}
+                  companyName={company.name}
+                  onSwitchToSocial={() => {
+                    setActiveTab("social");
+                    router.replace(`/company/${id}?tab=social`);
+                  }}
                 />
               ) : (runs && runs.agents_running_count > 0) ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center">
