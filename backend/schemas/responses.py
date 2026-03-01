@@ -73,11 +73,26 @@ class RankingItem(BaseModel):
     rank: int
 
 
+class PersonaFeedbackResponse(BaseModel):
+    competitor_id: str
+    url: str
+    competitor_name: str | None
+    persona: str
+    persona_description: str
+    rating_raw: str
+    rating_numeric: float
+    summary: str
+    pros: list[str]
+    cons: list[str]
+    derivation: list[str] = Field(default_factory=list)
+
+
 class CompanyDetailResponse(BaseModel):
     company: CompanyResponse
     competitors: list[CompetitorResponse]
     aggregated_feedback: list[AggregatedFeedback]
     rankings: list[RankingItem]
+    persona_feedback: list[PersonaFeedbackResponse] = Field(default_factory=list)
     review_items: list[dict[str, Any]] = Field(default_factory=list)
     social_items: list[dict[str, Any]] = Field(default_factory=list)
     outreach_items: list[dict[str, Any]] = Field(default_factory=list)

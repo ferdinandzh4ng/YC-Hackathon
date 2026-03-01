@@ -36,6 +36,7 @@ from schemas.responses import (
     CompanyResponse,
     CompetitorResponse,
     OutreachResponse,
+    PersonaFeedbackResponse,
     RankingItem,
     ReviewsScrapeResponse,
     ScrapeRunResponse,
@@ -45,6 +46,7 @@ from schemas.responses import (
 )
 from services.company_service import (
     get_aggregated_feedback_for_company,
+    get_persona_feedback_for_company,
     get_rankings_for_company,
     run_company_scrapes_parallel,
     run_four_personas_for_competitor,
@@ -474,6 +476,7 @@ async def get_company(
 
     aggregated_feedback = get_aggregated_feedback_for_company(supabase, company_id)
     rankings = get_rankings_for_company(supabase, company_id)
+    persona_feedback = get_persona_feedback_for_company(supabase, company_id)
 
     review_rows = supabase.table("review_items").select("*").eq("company_id", company_id).execute()
     review_items = [dict(r) for r in (review_rows.data or [])]
@@ -492,6 +495,7 @@ async def get_company(
         competitors=[CompetitorResponse(**c) for c in competitor_list],
         aggregated_feedback=[AggregatedFeedback(**f) for f in aggregated_feedback],
         rankings=[RankingItem(**r) for r in rankings],
+        persona_feedback=[PersonaFeedbackResponse(**p) for p in persona_feedback],
         review_items=review_items,
         social_items=social_items,
         outreach_items=outreach_items,

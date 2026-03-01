@@ -79,6 +79,20 @@ export interface RankingItem {
   rank: number;
 }
 
+export interface PersonaFeedback {
+  competitor_id: string;
+  url: string;
+  competitor_name: string | null;
+  persona: string;
+  persona_description: string;
+  rating_raw: string;
+  rating_numeric: number;
+  summary: string;
+  pros: string[];
+  cons: string[];
+  derivation: string[];
+}
+
 export interface ReviewItem {
   id?: string;
   company_id?: string;
@@ -117,6 +131,7 @@ export interface CompanyDetail {
   competitors: Competitor[];
   aggregated_feedback: AggregatedFeedback[];
   rankings: RankingItem[];
+  persona_feedback: PersonaFeedback[];
   review_items: ReviewItem[];
   social_items: SocialItem[];
   outreach_items: OutreachItem[];

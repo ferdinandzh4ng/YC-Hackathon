@@ -232,6 +232,7 @@ export default function CompanyDetailPage() {
                 <AnalyticsTab
                   rankings={detail.rankings}
                   aggregatedFeedback={detail.aggregated_feedback}
+                  personaFeedback={detail.persona_feedback}
                   reviewItems={detail.review_items}
                   socialItems={detail.social_items}
                   companyName={company.name}
