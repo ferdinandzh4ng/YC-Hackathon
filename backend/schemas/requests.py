@@ -20,3 +20,10 @@ class WebsitesScrapeRequest(BaseModel):
     location: str = Field(default="", description="Location to narrow search")
     urls: list[str] | None = Field(default=None, description="Optional: specific competitor URLs to scrape (skips search)")
     profile_id: str | None = Field(default=None, description="Optional Browser Use profile ID")
+
+
+class CompanyCreateRequest(BaseModel):
+    name: str = Field(description="Company name")
+    market: str = Field(description="Market / industry (free text)")
+    website: str = Field(default="", description="Company website URL")
+    location: str = Field(default="", description="Location from geolocation")

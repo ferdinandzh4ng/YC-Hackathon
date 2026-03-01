@@ -1,33 +1,57 @@
 """
 FastAPI backend: social, review, and website scraping via Browser Use Cloud.
 Runs multiple browser instances concurrently per endpoint and returns live_urls for each.
+Authenticated company/competitor/runs APIs use Supabase.
 """
 import asyncio
 import os
-from typing import Any
+from typing import Annotated, Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
 
+# Load .env from backend dir first (before db etc. read env)
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from agents.base import create_session
 from agents.reviews import REVIEW_SOURCES, RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS, SOCIAL_SOURCES
-from agents.websites import run_competitor_scrape, run_competitor_search
-from schemas.requests import ReviewsScrapeRequest, SocialScrapeRequest, WebsitesScrapeRequest
+from agents.websites import run_competitor_search
+from db import get_current_user_id, get_supabase_admin
+from schemas.requests import CompanyCreateRequest, ReviewsScrapeRequest, SocialScrapeRequest, WebsitesScrapeRequest
 from schemas.responses import (
+    AggregatedFeedback,
+    CompanyDetailResponse,
+    CompanyListResponse,
+    CompanyResponse,
+    CompetitorResponse,
+    RankingItem,
     ReviewsScrapeResponse,
+    ScrapeRunResponse,
+    ScrapeRunsListResponse,
     SocialScrapeResponse,
     WebsitesScrapeResponse,
 )
-
-load_dotenv()
+from services.company_service import (
+    get_aggregated_feedback_for_company,
+    get_rankings_for_company,
+    run_four_personas_for_competitor,
+)
 
 app = FastAPI(
     title="YC Marketing Agent API",
     description="Scrape social (X, LinkedIn, Instagram, Reddit), reviews (Google, Yelp), and competitor websites via Browser Use Cloud. All endpoints return live_urls to watch runs.",
     version="0.1.0",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 BROWSER_USE_API_KEY = os.getenv("BROWSER_USE_API_KEY")
@@ -237,6 +261,191 @@ async def scrape_websites(body: WebsitesScrapeRequest) -> WebsitesScrapeResponse
             errors["search"] = str(e)
 
     return WebsitesScrapeResponse(results=results, live_urls=live_urls, errors=errors)
+
+
+# ---------- Authenticated company APIs ----------
+
+
+def _company_to_response(row: dict[str, Any]) -> CompanyResponse:
+    return CompanyResponse(
+        id=str(row["id"]),
+        name=row["name"],
+        market=row["market"],
+        website=row.get("website"),
+        location=row.get("location"),
+        created_at=row.get("created_at", ""),
+    )
+
+
+@app.post("/companies", response_model=CompanyResponse)
+async def create_company(
+    body: CompanyCreateRequest,
+    background_tasks: BackgroundTasks,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Create a company, run competitor search (query=name + ' ' + market, location), store competitors, start 4-persona site scrapes in background."""
+    supabase = get_supabase_admin()
+    ins = supabase.table("companies").insert({
+        "user_id": user_id,
+        "name": body.name,
+        "market": body.market,
+        "website": body.website or None,
+        "location": body.location or None,
+    }).execute()
+    if not ins.data or len(ins.data) == 0:
+        raise HTTPException(500, detail="Failed to create company")
+    company = ins.data[0]
+    company_id = str(company["id"])
+
+    query = f"{body.name} {body.market}".strip()
+    location = body.location or ""
+    try:
+        out, _ = await run_competitor_search(query, location=location, profile_id=DEFAULT_PROFILE_ID)
+    except Exception as e:
+        # Still return company; competitors can be added later
+        return _company_to_response(company)
+
+    results = out.model_dump()["results"] if out else []
+    profile_id = DEFAULT_PROFILE_ID
+    for item in results[:20]:  # cap at 20 competitors
+        url = (item.get("url") or "").strip()
+        if not url:
+            continue
+        name = item.get("name") or url
+        comp_ins = supabase.table("competitors").insert({
+            "company_id": company_id,
+            "url": url,
+            "name": name,
+        }).execute()
+        if not comp_ins.data or len(comp_ins.data) == 0:
+            continue
+        competitor_id = str(comp_ins.data[0]["id"])
+        background_tasks.add_task(run_four_personas_for_competitor, company_id, competitor_id, url, profile_id)
+
+    return _company_to_response(company)
+
+
+@app.get("/companies", response_model=CompanyListResponse)
+async def list_companies(user_id: Annotated[str, Depends(get_current_user_id)]):
+    """List companies for the current user."""
+    supabase = get_supabase_admin()
+    r = supabase.table("companies").select("id, name, market, website, location, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
+    companies = [_company_to_response(row) for row in (r.data or [])]
+    return CompanyListResponse(companies=companies)
+
+
+@app.get("/companies/{company_id}", response_model=CompanyDetailResponse)
+async def get_company(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Get company with competitors, aggregated feedback, rankings, review_items, social_items."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("*").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    company = _company_to_response(comp.data[0])
+
+    competitors = supabase.table("competitors").select("id, url, name").eq("company_id", company_id).execute()
+    competitor_list = [{"id": str(c["id"]), "url": c["url"], "name": c.get("name")} for c in (competitors.data or [])]
+
+    aggregated_feedback = get_aggregated_feedback_for_company(supabase, company_id)
+    rankings = get_rankings_for_company(supabase, company_id)
+
+    review_rows = supabase.table("review_items").select("*").eq("company_id", company_id).execute()
+    review_items = [dict(r) for r in (review_rows.data or [])]
+
+    social_rows = supabase.table("social_items").select("*").eq("company_id", company_id).execute()
+    social_items = [dict(s) for s in (social_rows.data or [])]
+
+    return CompanyDetailResponse(
+        company=company,
+        competitors=[CompetitorResponse(**c) for c in competitor_list],
+        aggregated_feedback=[AggregatedFeedback(**f) for f in aggregated_feedback],
+        rankings=[RankingItem(**r) for r in rankings],
+        review_items=review_items,
+        social_items=social_items,
+    )
+
+
+@app.get("/companies/{company_id}/runs", response_model=ScrapeRunsListResponse)
+async def list_company_runs(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """List scrape runs for the company (for scrapers page): sites, status, live_url. agents_running_count = count where status=running."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+
+    runs = supabase.table("scrape_runs").select("id, competitor_id, type, status, live_url, started_at, completed_at, error_message").eq("company_id", company_id).order("started_at", desc=True).execute()
+    run_list = runs.data or []
+    agents_running = sum(1 for r in run_list if r.get("status") == "running")
+    run_responses = [
+        ScrapeRunResponse(
+            id=str(r["id"]),
+            competitor_id=str(r["competitor_id"]) if r.get("competitor_id") else None,
+            type=r["type"],
+            status=r["status"],
+            live_url=r.get("live_url"),
+            started_at=str(r.get("started_at", "")),
+            completed_at=str(r["completed_at"]) if r.get("completed_at") else None,
+            error_message=r.get("error_message"),
+        )
+        for r in run_list
+    ]
+    return ScrapeRunsListResponse(runs=run_responses, agents_running_count=agents_running)
+
+
+def _enqueue_rescrape_for_companies(
+    background_tasks: BackgroundTasks,
+    supabase,
+    company_rows: list[dict],
+    profile_id: str | None,
+) -> None:
+    """Queue review + site rescrape tasks for the given companies."""
+    for row in company_rows:
+        company_id = str(row["id"])
+        name = (row.get("name") or "").strip()
+        location = (row.get("location") or "").strip()
+        background_tasks.add_task(run_reviews_for_company, company_id, name, location, profile_id)
+        comps = supabase.table("competitors").select("id, url").eq("company_id", company_id).execute()
+        for c in (comps.data or []):
+            comp_id = str(c["id"])
+            url = (c.get("url") or "").strip()
+            if url:
+                background_tasks.add_task(run_four_personas_for_competitor, company_id, comp_id, url, profile_id)
+
+
+@app.post("/companies/rescrape-all")
+async def rescrape_my_companies(
+    background_tasks: BackgroundTasks,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Rescrape all of the current user's companies (reviews + site personas). Call from the site with Bearer token; no cron secret needed."""
+    supabase = get_supabase_admin()
+    companies = supabase.table("companies").select("id, name, location").eq("user_id", user_id).execute()
+    rows = companies.data or []
+    _enqueue_rescrape_for_companies(background_tasks, supabase, rows, DEFAULT_PROFILE_ID)
+    return {"ok": True, "companies_queued": len(rows)}
+
+
+@app.post("/cron/daily-rescrape")
+async def daily_rescrape(
+    background_tasks: BackgroundTasks,
+    x_cron_secret: str | None = Header(None, alias="X-Cron-Secret"),
+):
+    """Rescrape all companies (all users). Use from cron with X-Cron-Secret. For UI, use POST /companies/rescrape-all with Bearer token instead."""
+    secret = os.getenv("CRON_SECRET")
+    if secret and x_cron_secret != secret:
+        raise HTTPException(401, detail="Invalid or missing X-Cron-Secret")
+
+    supabase = get_supabase_admin()
+    companies = supabase.table("companies").select("id, name, location").execute()
+    rows = companies.data or []
+    _enqueue_rescrape_for_companies(background_tasks, supabase, rows, DEFAULT_PROFILE_ID)
+    return {"ok": True, "companies_queued": len(rows)}
 
 
 if __name__ == "__main__":
