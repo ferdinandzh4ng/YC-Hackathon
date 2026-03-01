@@ -37,8 +37,10 @@ For each follower (up to {limit}):
   4. Send them a personalized message:
      - You are reaching out on behalf of "{company_name}" ({company_market})
      - Write a short, friendly, personalized DM (2-3 sentences) that references something from their bio or profile
-     - The DM should introduce {company_name} and what it offers, and invite them to check it out
-     - Do NOT mention the competitor by name
+     - The DM must include ONE concrete downside about "{competitor_handle}" (or their offering) and then explain how {company_name} does that part better
+     - The downside should be specific and business-relevant (e.g., slow support, unclear pricing, limited customization), not generic insults
+     - The DM should introduce {company_name}, what it offers, and invite them to check it out
+     - Keep tone professional and non-defamatory; do not make illegal or fabricated claims
   5. Record whether the DM was sent successfully
 
 If a follower's DMs are closed or you cannot message them for any reason, just skip them and continue to the next follower. Do not get stuck on any single follower.
@@ -79,8 +81,10 @@ For each follower (up to {limit}):
   4. Send them a personalized message:
      - You are reaching out on behalf of "{company_name}" ({company_market})
      - Write a short, friendly, personalized DM (2-3 sentences) that references something from their bio or profile
-     - The DM should introduce {company_name} and what it offers, and invite them to check it out
-     - Do NOT mention the competitor by name
+     - The DM must include ONE concrete downside about "{competitor_handle}" (or their offering) and then explain how {company_name} does that part better
+     - The downside should be specific and business-relevant (e.g., slow support, unclear pricing, limited customization), not generic insults
+     - The DM should introduce {company_name}, what it offers, and invite them to check it out
+     - Keep tone professional and non-defamatory; do not make illegal or fabricated claims
   5. Record whether the DM was sent successfully
 
 Return the list of followers you messaged with: username, display_name, bio, whether the DM was sent (dm_sent), and the DM text you used (dm_text)."""
@@ -119,8 +123,10 @@ For each follower (up to {limit}):
   4. Send them a personalized message:
      - You are reaching out on behalf of "{company_name}" ({company_market})
      - Write a short, friendly, personalized DM (2-3 sentences) that references something from their profile
-     - The DM should introduce {company_name} and what it offers, and invite them to check it out
-     - Do NOT mention the competitor by name
+     - The DM must include ONE concrete downside about "{competitor_handle}" (or their offering) and then explain how {company_name} does that part better
+     - The downside should be specific and business-relevant (e.g., slow support, unclear pricing, limited customization), not generic insults
+     - The DM should introduce {company_name}, what it offers, and invite them to check it out
+     - Keep tone professional and non-defamatory; do not make illegal or fabricated claims
   5. Record whether the DM was sent successfully
 
 Return the list of followers you messaged with: username, display_name, bio, whether the DM was sent (dm_sent), and the DM text you used (dm_text)."""
