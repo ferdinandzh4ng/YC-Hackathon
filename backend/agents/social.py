@@ -1,5 +1,5 @@
 """
-Social media agents: X (Twitter), LinkedIn, Instagram, Reddit.
+Social media agents: X (Twitter), Instagram, Facebook.
 Each runs a Browser Use Cloud task and returns structured results + live_url.
 """
 from pydantic import BaseModel
@@ -54,61 +54,6 @@ async def run_x(query: str, location: str = "", profile_id: str | None = None, s
     return mapped, live_url
 
 
-# ----- Reddit -----
-
-REDDIT_TASK_TEMPLATE = """Go to Reddit and search for "{query}" (add "{location}" if relevant).
-From the search results, extract a list of relevant posts: subreddit, title, author, post text (or a short excerpt), and post url.
-Return up to 15 items."""
-
-def _reddit_task(query: str, location: str) -> str:
-    return REDDIT_TASK_TEMPLATE.format(query=query, location=location or "the specified area")
-
-def _reddit_start_url(query: str, location: str) -> str:
-    from urllib.parse import quote_plus
-    q = f"{query} {location}".strip() if location else query
-    return f"https://www.reddit.com/search/?q={quote_plus(q)}"
-
-class RedditResult(BaseModel):
-    subreddit: str
-    title: str
-    author: str
-    post_text: str
-    url: str
-
-class RedditResults(BaseModel):
-    results: list[RedditResult]
-
-async def run_reddit(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
-    task = _reddit_task(query, location)
-    start_url = _reddit_start_url(query, location)
-    out, live_url = await run_task(task, RedditResults, start_url=start_url, allowed_domains=["reddit.com", "www.reddit.com", "old.reddit.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
-    if out is None:
-        return None, live_url
-    mapped = SocialPostResults(results=[SocialPostItem(handle_or_author=r.author, display_name=r.subreddit, text=r.post_text or r.title, url=r.url) for r in out.results])
-    return mapped, live_url
-
-
-# ----- LinkedIn -----
-
-LINKEDIN_TASK_TEMPLATE = """Go to LinkedIn and search for "{query}" (add "{location}" if relevant).
-From the search results (posts or company pages), extract a list: handle/author, display name, post or page text snippet, and link.
-Return up to 15 items."""
-
-def _linkedin_task(query: str, location: str) -> str:
-    return LINKEDIN_TASK_TEMPLATE.format(query=query, location=location or "the specified area")
-
-def _linkedin_start_url(query: str, location: str) -> str:
-    from urllib.parse import quote_plus
-    q = f"{query} {location}".strip() if location else query
-    return f"https://www.linkedin.com/search/results/all/?keywords={quote_plus(q)}"
-
-async def run_linkedin(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
-    task = _linkedin_task(query, location)
-    start_url = _linkedin_start_url(query, location)
-    out, live_url = await run_task(task, SocialPostResults, start_url=start_url, allowed_domains=["linkedin.com", "www.linkedin.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
-    return out, live_url
-
-
 # ----- Instagram -----
 
 INSTAGRAM_TASK_TEMPLATE = """Go to Instagram and search for "{query}" (add "{location}" if relevant).
@@ -130,12 +75,32 @@ async def run_instagram(query: str, location: str = "", profile_id: str | None =
     return out, live_url
 
 
+# ----- Facebook -----
+
+FACEBOOK_TASK_TEMPLATE = """Go to Facebook and search for "{query}" (add "{location}" if relevant).
+From the search results (posts, pages, or groups), extract a list: handle or author, display name, post or page text snippet, and link.
+Return up to 15 items."""
+
+def _facebook_task(query: str, location: str) -> str:
+    return FACEBOOK_TASK_TEMPLATE.format(query=query, location=location or "the specified area")
+
+def _facebook_start_url(query: str, location: str) -> str:
+    from urllib.parse import quote_plus
+    q = f"{query} {location}".strip() if location else query
+    return f"https://www.facebook.com/search/posts/?q={quote_plus(q)}"
+
+async def run_facebook(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
+    task = _facebook_task(query, location)
+    start_url = _facebook_start_url(query, location)
+    out, live_url = await run_task(task, SocialPostResults, start_url=start_url, allowed_domains=["facebook.com", "www.facebook.com", "m.facebook.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
+    return out, live_url
+
+
 # ----- Dispatcher -----
 
-SOCIAL_SOURCES = {"x", "linkedin", "instagram", "reddit"}
+SOCIAL_SOURCES = {"x", "instagram", "facebook"}
 RUNNERS = {
     "x": run_x,
-    "linkedin": run_linkedin,
     "instagram": run_instagram,
-    "reddit": run_reddit,
+    "facebook": run_facebook,
 }

@@ -17,7 +17,7 @@ from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
 from db import get_supabase_admin
 
-SOCIAL_SOURCES_ORDERED = ["x", "linkedin", "instagram", "reddit"]
+SOCIAL_SOURCES_ORDERED = ["x", "instagram", "facebook"]
 
 DEFAULT_PROFILE_ID = os.getenv("BROWSER_USE_PROFILE_ID")
 
@@ -134,8 +134,8 @@ async def run_social_for_company(
     ]
     insert_result = supabase.table("scrape_runs").insert(rows).execute()
     run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
-    if len(run_ids) != 4:
-        logger.warning("run_social_for_company: failed to create 4 run rows for company_id=%s", company_id)
+    if len(run_ids) != len(SOCIAL_SOURCES_ORDERED):
+        logger.warning("run_social_for_company: failed to create run rows for company_id=%s", company_id)
         return
 
     async def run_one(run_id: str, source: str) -> None:
@@ -171,8 +171,8 @@ async def run_social_for_company(
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
 
-    await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(4)])
-    logger.info("run_social_for_company: all 4 social sources finished for company_id=%s", company_id)
+    await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(len(SOCIAL_SOURCES_ORDERED))])
+    logger.info("run_social_for_company: all social sources finished for company_id=%s", company_id)
 
 
 def aggregate_most_frequent_pros_cons(pros_cons_list: list[list[str]], top_n: int = 5) -> list[str]:

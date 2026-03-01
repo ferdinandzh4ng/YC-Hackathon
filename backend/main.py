@@ -50,7 +50,7 @@ from services.company_service import (
 
 app = FastAPI(
     title="YC Marketing Agent API",
-    description="Scrape social (X, LinkedIn, Instagram, Reddit), reviews (Google, Yelp), and competitor websites via Browser Use Cloud. All endpoints return live_urls to watch runs.",
+    description="Scrape social (X, Instagram, Facebook), reviews (Google, Yelp), and competitor websites via Browser Use Cloud. All endpoints return live_urls to watch runs.",
     version="0.1.0",
 )
 app.add_middleware(
@@ -394,6 +394,26 @@ async def get_company(
         review_items=review_items,
         social_items=social_items,
     )
+
+
+@app.post("/companies/{company_id}/scrape/social")
+async def start_social_scrape(
+    company_id: str,
+    background_tasks: BackgroundTasks,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Queue social scrapes (X, LinkedIn, Instagram, Reddit) for this company. Runs in background; check Scrapers tab for runs and live_urls."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market, location").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    row = comp.data[0]
+    query = f"{row.get('name') or ''} {row.get('market') or ''}".strip() or row.get("name") or "bakery"
+    location = (row.get("location") or "").strip()
+    profile_id = DEFAULT_PROFILE_ID
+    background_tasks.add_task(run_social_for_company, company_id, query, location, profile_id)
+    logger.info("start_social_scrape: queued social scrapes for company_id=%s", company_id)
+    return {"message": "Social scrapes queued (X, Instagram, Facebook). Check the Scrapers tab to watch runs.", "company_id": company_id}
 
 
 @app.get("/companies/{company_id}/runs", response_model=ScrapeRunsListResponse)

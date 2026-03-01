@@ -7,13 +7,14 @@ import { BarChart3, Clock, Users, Loader2 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import AnalyticsTab from "@/components/AnalyticsTab";
 import ScrapersTab from "@/components/ScrapersTab";
+import SocialPostQualityTab from "@/components/SocialPostQualityTab";
 import {
   apiFetch,
   type CompanyDetail,
   type ScrapeRunsResponse,
 } from "../../../lib/api";
 
-type Tab = "analytics" | "scrapers";
+type Tab = "analytics" | "scrapers" | "social";
 
 export default function CompanyDetailPage() {
   const params = useParams();
@@ -25,10 +26,10 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const tabParam = searchParams.get("tab");
   const [activeTab, setActiveTab] = useState<Tab>(
-    () => (tabParam === "scrapers" ? "scrapers" : "analytics")
+    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "social" ? "social" : "analytics")
   );
   useEffect(() => {
-    if (tabParam === "scrapers" || tabParam === "analytics") setActiveTab(tabParam);
+    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "social") setActiveTab(tabParam);
   }, [tabParam]);
 
   const loadDetail = useCallback(async () => {
@@ -60,9 +61,10 @@ export default function CompanyDetailPage() {
 
   useEffect(() => {
     loadRuns();
-    const t = setInterval(loadRuns, 10000);
+    const delay = runs?.agents_running_count && runs.agents_running_count > 0 ? 3000 : 10000;
+    const t = setInterval(loadRuns, delay);
     return () => clearInterval(t);
-  }, [loadRuns]);
+  }, [loadRuns, runs?.agents_running_count]);
 
   if (loading || !detail) {
     return (
@@ -77,7 +79,15 @@ export default function CompanyDetailPage() {
 
   return (
     <>
-      <Sidebar activeTab={activeTab} onTabChange={(t) => setActiveTab(t as Tab)} />
+      <Sidebar
+          activeTab={activeTab}
+          onTabChange={(t) => {
+            setActiveTab(t as Tab);
+            const next = new URLSearchParams(searchParams?.toString() ?? "");
+            next.set("tab", t);
+            router.replace(`/company/${id}?${next.toString()}`, { scroll: false });
+          }}
+        />
 
       <div className="ml-[220px] px-8 py-7">
         <motion.div
@@ -145,6 +155,14 @@ export default function CompanyDetailPage() {
                   rankings={detail.rankings}
                   aggregatedFeedback={detail.aggregated_feedback}
                   reviewItems={detail.review_items}
+                  socialItems={detail.social_items}
+                  companyName={company.name}
+                  onSwitchToSocial={() => {
+                    setActiveTab("social");
+                    const next = new URLSearchParams(searchParams?.toString() ?? "");
+                    next.set("tab", "social");
+                    router.replace(`/company/${id}?${next.toString()}`, { scroll: false });
+                  }}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -167,7 +185,7 @@ export default function CompanyDetailPage() {
                 </div>
               )}
             </motion.div>
-          ) : (
+          ) : activeTab === "scrapers" ? (
             <motion.div
               key="scrapers"
               initial={{ opacity: 0, y: 8 }}
@@ -179,6 +197,31 @@ export default function CompanyDetailPage() {
                 runs={runs?.runs ?? []}
                 agentsRunningCount={runs?.agents_running_count ?? 0}
                 competitors={detail.competitors}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="social"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              <SocialPostQualityTab
+                socialItems={detail.social_items}
+                companyName={company.name}
+                companyId={company.id}
+                runs={runs?.runs ?? []}
+                onRefresh={() => {
+                  loadDetail();
+                  loadRuns();
+                }}
+                onSwitchToScrapers={() => {
+                  setActiveTab("scrapers");
+                  const next = new URLSearchParams(searchParams?.toString() ?? "");
+                  next.set("tab", "scrapers");
+                  router.replace(`/company/${id}?${next.toString()}`, { scroll: false });
+                }}
               />
             </motion.div>
           )}

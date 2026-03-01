@@ -89,13 +89,23 @@ export interface ReviewItem {
   url: string | null;
 }
 
+export interface SocialItem {
+  id?: string;
+  company_id?: string;
+  source: string;
+  handle_or_author?: string | null;
+  display_name?: string | null;
+  text?: string | null;
+  url?: string | null;
+}
+
 export interface CompanyDetail {
   company: Company;
   competitors: Competitor[];
   aggregated_feedback: AggregatedFeedback[];
   rankings: RankingItem[];
   review_items: ReviewItem[];
-  social_items: unknown[];
+  social_items: SocialItem[];
 }
 
 export interface ScrapeRun {
