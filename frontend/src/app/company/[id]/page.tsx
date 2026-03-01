@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { BarChart3, Clock, Users, Loader2 } from "lucide-react";
+import { BarChart3, Clock, Users, Loader2, Trash2 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import AnalyticsTab from "@/components/AnalyticsTab";
 import ScrapersTab from "@/components/ScrapersTab";
 import {
   apiFetch,
+  deleteCompany,
   type CompanyDetail,
   type ScrapeRunsResponse,
 } from "../../../lib/api";
@@ -23,6 +24,9 @@ export default function CompanyDetailPage() {
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [runs, setRuns] = useState<ScrapeRunsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const agentsRunningRef = useRef(0);
   const tabParam = searchParams.get("tab");
   const [activeTab, setActiveTab] = useState<Tab>(
     () => (tabParam === "scrapers" ? "scrapers" : "analytics")
@@ -60,9 +64,21 @@ export default function CompanyDetailPage() {
 
   useEffect(() => {
     loadRuns();
-    const t = setInterval(loadRuns, 10000);
+    const intervalMs = 3000;
+    const t = setInterval(loadRuns, intervalMs);
     return () => clearInterval(t);
   }, [loadRuns]);
+
+  useEffect(() => {
+    const running = runs?.agents_running_count ?? 0;
+    const prev = agentsRunningRef.current;
+    agentsRunningRef.current = running;
+    if (prev > 0 && running === 0 && id) {
+      loadDetail();
+      setActiveTab("analytics");
+      router.replace(`/company/${id}?tab=analytics`);
+    }
+  }, [runs?.agents_running_count, id, router, loadDetail]);
 
   if (loading || !detail) {
     return (
@@ -74,6 +90,17 @@ export default function CompanyDetailPage() {
 
   const company = detail.company;
   const hasData = detail.rankings.length > 0 || detail.aggregated_feedback.length > 0 || detail.review_items.length > 0;
+
+  const handleDelete = async () => {
+    if (!id || deleting) return;
+    setDeleting(true);
+    try {
+      await deleteCompany(id);
+      router.push("/");
+    } catch {
+      setDeleting(false);
+    }
+  };
 
   return (
     <>
@@ -101,7 +128,7 @@ export default function CompanyDetailPage() {
                   <div className="flex items-center gap-1">
                     <Users size={11} className="text-zinc-400" />
                     <span className="text-[12px] text-zinc-500">
-                      {detail.competitors.length} competitors
+                      {detail.competitors.length} companies
                     </span>
                   </div>
                   {runs && runs.agents_running_count > 0 && (
@@ -118,17 +145,67 @@ export default function CompanyDetailPage() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1 text-[11px] flex-wrap justify-end">
-              {detail.competitors.map((c) => (
-                <span
-                  key={c.id}
-                  className="px-2 py-0.5 bg-zinc-100 rounded-full text-zinc-500 font-medium"
-                >
-                  {c.name || c.url}
-                </span>
-              ))}
-            </div>
+            <button
+              type="button"
+              onClick={() => setDeleteConfirmOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 text-[13px] text-red-600 hover:bg-red-50 rounded-lg border border-red-200 hover:border-red-300 transition-colors"
+            >
+              <Trash2 size={14} />
+              Delete company
+            </button>
           </div>
+
+          <AnimatePresence>
+            {deleteConfirmOpen && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40"
+                onClick={() => !deleting && setDeleteConfirmOpen(false)}
+              >
+                <motion.div
+                  initial={{ scale: 0.96, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.96, opacity: 0 }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm"
+                >
+                  <p className="text-[15px] font-medium text-zinc-900 mb-1">
+                    Delete company?
+                  </p>
+                  <p className="text-[13px] text-zinc-500 mb-5">
+                    This will permanently remove <strong>{company.name}</strong> and all its competitor data, runs, and feedback.
+                  </p>
+                  <div className="flex gap-3 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteConfirmOpen(false)}
+                      disabled={deleting}
+                      className="px-4 py-2 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDelete}
+                      disabled={deleting}
+                      className="px-4 py-2 text-[13px] font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-60 flex items-center gap-2"
+                    >
+                      {deleting ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          Deleting…
+                        </>
+                      ) : (
+                        "Delete"
+                      )}
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
 
         <AnimatePresence mode="wait">
@@ -146,6 +223,24 @@ export default function CompanyDetailPage() {
                   aggregatedFeedback={detail.aggregated_feedback}
                   reviewItems={detail.review_items}
                 />
+              ) : (runs && runs.agents_running_count > 0) ? (
+                <div className="flex flex-col items-center justify-center py-24 text-center">
+                  <div className="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center mb-5">
+                    <Loader2 size={28} className="text-zinc-500 animate-spin" />
+                  </div>
+                  <p className="text-[15px] font-medium text-zinc-800 mb-1">
+                    Compiling data
+                  </p>
+                  <p className="text-[13px] text-zinc-500 max-w-[300px]">
+                    Analysis is being built from scrapers. This may take a minute.
+                  </p>
+                  <button
+                    onClick={() => setActiveTab("scrapers")}
+                    className="mt-5 px-4 py-2 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg border border-zinc-200 transition-colors"
+                  >
+                    View Scrapers
+                  </button>
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
                   <div className="w-14 h-14 rounded-2xl bg-zinc-100 flex items-center justify-center mb-4">

@@ -20,6 +20,12 @@ function aggregatedToUXFeedback(f: AggregatedFeedback): UXFeedback {
   };
 }
 
+function getSentiment(rating: number): "positive" | "negative" | "neutral" {
+  if (rating >= 4) return "positive";
+  if (rating <= 2) return "negative";
+  return "neutral";
+}
+
 function reviewItemsToCompanyReviews(source: string, items: ReviewItem[]): CompanyReviews[] {
   if (items.length === 0) return [];
   const byPlace = new Map<string, { rating: string; text: string; reviewer: string }[]>();
@@ -34,10 +40,22 @@ function reviewItemsToCompanyReviews(source: string, items: ReviewItem[]): Compa
   }
   return Array.from(byPlace.entries()).map(([place, reviews], i) => {
     const avg = reviews.reduce((a, r) => a + (parseFloat(r.rating) || 0), 0) / reviews.length;
-    const frequent = reviews.slice(0, 5).map((r) => ({
-      text: r.text.slice(0, 60) + (r.text.length > 60 ? "…" : ""),
+    const withNum = reviews.map((r) => ({ ...r, num: parseFloat(r.rating) || 0 }));
+    const sorted = [...withNum].sort((a, b) => b.num - a.num);
+    const n = sorted.length;
+    const indices = n <= 5
+      ? sorted.map((_, j) => j)
+      : [
+          0, 1,
+          Math.floor(n / 2),
+          Math.max(0, n - 2),
+          n - 1,
+        ].filter((v, idx, arr) => arr.indexOf(v) === idx).slice(0, 5);
+    const balanced = indices.map((j) => sorted[j]);
+    const frequent = balanced.map((r) => ({
+      text: r.text,
       count: 1,
-      sentiment: "positive" as const,
+      sentiment: getSentiment(r.num),
     }));
     return {
       id: `${source}-${i}`,

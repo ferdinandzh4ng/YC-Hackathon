@@ -52,6 +52,7 @@ export interface Company {
   website: string | null;
   location: string | null;
   created_at: string;
+  last_updated?: string | null;
 }
 
 export interface Competitor {
@@ -113,4 +114,8 @@ export interface ScrapeRun {
 export interface ScrapeRunsResponse {
   runs: ScrapeRun[];
   agents_running_count: number;
+}
+
+export async function deleteCompany(id: string): Promise<void> {
+  await apiFetch(`/companies/${id}`, { method: "DELETE" });
 }

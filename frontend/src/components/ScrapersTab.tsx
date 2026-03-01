@@ -11,6 +11,7 @@ import {
   Clock,
   X,
   Bot,
+  Star,
 } from "lucide-react";
 import type { ScrapeRun } from "../lib/api";
 import type { Competitor } from "../lib/api";
@@ -21,7 +22,7 @@ export interface ScrapersTabProps {
   competitors?: Competitor[];
 }
 
-type SiteKind = { id: string; name: string; isSocial: boolean };
+type SiteKind = { id: string; name: string; isSocial: boolean; isReviews: boolean; socialCompetitorId?: string | null };
 
 function formatStartedAt(s: string) {
   if (!s) return "—";
@@ -35,6 +36,8 @@ function formatStartedAt(s: string) {
 
 function runSubLabel(run: ScrapeRun): string {
   if (run.type === "social" && run.metadata?.source) return run.metadata.source as string;
+  if (run.type === "reviews_google") return "Google Reviews";
+  if (run.type === "reviews_yelp") return "Yelp Reviews";
   return run.type;
 }
 
@@ -52,15 +55,35 @@ export default function ScrapersTab({
       id: c.id,
       name: c.name || c.url || c.id,
       isSocial: false,
+      isReviews: false,
     }));
-    const hasSocialRuns = runs.some((r) => r.type === "social");
-    if (hasSocialRuns) list.push({ id: "__social__", name: "Social", isSocial: true });
+    const socialRuns = runs.filter((r) => r.type === "social");
+    const socialCompetitorIds = Array.from(new Set(socialRuns.map((r) => r.competitor_id ?? "__company__")));
+    socialCompetitorIds.forEach((cid) => {
+      const comp = cid === "__company__" ? null : competitors.find((c) => c.id === cid);
+      const label = cid === "__company__" ? "Your company" : (comp?.name || comp?.url || cid);
+      list.push({
+        id: cid === "__company__" ? "__social__" : `__social__${cid}`,
+        name: `Social (${label})`,
+        isSocial: true,
+        isReviews: false,
+        socialCompetitorId: cid === "__company__" ? null : cid,
+      });
+    });
+    const hasReviewRuns = runs.some((r) => r.type === "reviews_google" || r.type === "reviews_yelp");
+    if (hasReviewRuns) list.push({ id: "__reviews__", name: "Reviews", isSocial: false, isReviews: true });
     return list;
   }, [competitors, runs]);
 
   const runsForSite = useMemo(() => {
     if (!selectedSite) return [];
+    if (selectedSite.isSocial && selectedSite.socialCompetitorId !== undefined) {
+      return runs.filter(
+        (r) => r.type === "social" && (selectedSite.socialCompetitorId == null ? r.competitor_id == null : r.competitor_id === selectedSite.socialCompetitorId)
+      );
+    }
     if (selectedSite.isSocial) return runs.filter((r) => r.type === "social");
+    if (selectedSite.isReviews) return runs.filter((r) => r.type === "reviews_google" || r.type === "reviews_yelp");
     return runs.filter((r) => r.competitor_id === selectedSite.id);
   }, [selectedSite, runs]);
 
@@ -95,19 +118,24 @@ export default function ScrapersTab({
       >
         <h3 className="text-[14px] font-semibold text-zinc-900 mb-3">Scrapers</h3>
         <p className="text-[11px] text-zinc-500 mb-6">
-          Each cube is a site. Click a cube to see scrapers for that site, then click Watch to open the live agent.
+          Site cubes = one per competitor (website + 4 personas). Social cubes = X, Instagram, Reddit per business. Click a cube to see runs; Watch appears when the session is ready.
         </p>
 
         {sites.length === 0 ? (
           <div className="py-16 text-center text-[13px] text-zinc-500 rounded-xl border border-zinc-200 bg-zinc-50/50">
-            No sites yet. Add a company to start competitor and social scrapes.
+            No scrapers yet. Add a company to start competitor, review, and social scrapes.
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-5">
             {sites.map((site, index) => {
               const siteRuns = site.isSocial
-                ? runs.filter((r) => r.type === "social")
-                : runs.filter((r) => r.competitor_id === site.id);
+                ? runs.filter((r) =>
+                    r.type === "social" &&
+                    (site.socialCompetitorId == null ? r.competitor_id == null : r.competitor_id === site.socialCompetitorId)
+                  )
+                : site.isReviews
+                  ? runs.filter((r) => r.type === "reviews_google" || r.type === "reviews_yelp")
+                  : runs.filter((r) => r.competitor_id === site.id);
               const running = siteRuns.filter((r) => r.status === "running").length;
               const done = siteRuns.filter((r) => r.status === "done").length;
               return (
@@ -122,7 +150,11 @@ export default function ScrapersTab({
                 >
                   <div className="relative w-full aspect-square max-w-[140px] rounded-xl bg-white border-2 border-zinc-200 shadow-sm group-hover:border-zinc-300 group-hover:shadow-md transition-all flex flex-col justify-end overflow-hidden">
                     <div className="flex-1 flex items-center justify-center p-3">
-                      <Globe size={28} className="text-zinc-400 group-hover:text-zinc-600 transition-colors" />
+                      {site.isReviews ? (
+                        <Star size={28} className="text-zinc-400 group-hover:text-zinc-600 transition-colors" />
+                      ) : (
+                        <Globe size={28} className="text-zinc-400 group-hover:text-zinc-600 transition-colors" />
+                      )}
                     </div>
                     <div className="h-2 w-full bg-zinc-100 group-hover:bg-zinc-200 transition-colors" />
                   </div>
@@ -169,9 +201,14 @@ export default function ScrapersTab({
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 bg-zinc-50">
-                <h3 className="text-[14px] font-semibold text-zinc-900">
-                  Scrapers — {selectedSite.name}
-                </h3>
+                <div>
+                  <h3 className="text-[14px] font-semibold text-zinc-900">
+                    Scrapers — {selectedSite.name}
+                  </h3>
+                  <p className="text-[11px] text-zinc-500 mt-0.5">
+                    Watch appears when the session is ready. List refreshes every few seconds.
+                  </p>
+                </div>
                 <button
                   type="button"
                   onClick={() => setSelectedSite(null)}
@@ -227,16 +264,23 @@ export default function ScrapersTab({
                               </div>
                             </div>
                           </div>
-                          {run.live_url && (
-                            <button
-                              type="button"
-                              onClick={() => setWatchUrl(run.live_url!)}
-                              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-200 bg-white text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 transition-colors flex-shrink-0"
-                            >
-                              <Play size={12} />
-                              Watch
-                            </button>
-                          )}
+                          <div className="flex-shrink-0 w-[90px] flex justify-end">
+                            {run.live_url ? (
+                              <button
+                                type="button"
+                                onClick={() => setWatchUrl(run.live_url!)}
+                                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-200 bg-white text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 transition-colors"
+                              >
+                                <Play size={12} />
+                                Watch
+                              </button>
+                            ) : isRunning ? (
+                              <span className="text-[11px] text-zinc-400 flex items-center gap-1">
+                                <Loader2 size={10} className="animate-spin" />
+                                Starting…
+                              </span>
+                            ) : null}
+                          </div>
                         </li>
                       );
                     })}

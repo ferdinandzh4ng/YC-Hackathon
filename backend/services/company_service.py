@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agents.base import create_session
+from agents.reviews import RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
 from db import get_supabase_admin
 
-SOCIAL_SOURCES_ORDERED = ["x", "linkedin", "instagram", "reddit"]
+SOCIAL_SOURCES_ORDERED = ["x", "instagram", "reddit"]
+REVIEW_SOURCES_ORDERED = ["google", "yelp"]
 
 DEFAULT_PROFILE_ID = os.getenv("BROWSER_USE_PROFILE_ID")
 
@@ -120,22 +122,135 @@ async def run_all_competitor_site_scrapes_parallel(
     logger.info("run_all_competitor_site_scrapes_parallel: all %d competitors finished", len(competitors))
 
 
+async def run_company_scrapes_parallel(
+    company_id: str,
+    query: str,
+    location: str,
+    competitor_tuples: list[tuple[str, str]],
+    social_competitors: list[tuple[str, str]],
+    profile_id: str | None,
+) -> None:
+    """Run site scrapes, reviews, our-company social, and per-competitor social all at the same time (parallel)."""
+    logger.info("run_company_scrapes_parallel: starting site + reviews + social (yours + %d competitors) for company_id=%s", len(social_competitors), company_id)
+    site_task = (
+        run_all_competitor_site_scrapes_parallel(company_id, competitor_tuples, profile_id)
+        if competitor_tuples
+        else asyncio.sleep(0)
+    )
+    social_competitors_task = (
+        run_social_for_all_competitors(company_id, social_competitors, location, profile_id)
+        if social_competitors
+        else asyncio.sleep(0)
+    )
+    review_places = [query] + [name for _cid, name in social_competitors]
+    reviews_task = (
+        run_reviews_for_all_places(company_id, review_places, location, profile_id)
+        if review_places
+        else asyncio.sleep(0)
+    )
+    await asyncio.gather(
+        site_task,
+        reviews_task,
+        run_social_for_company(company_id, query, location, profile_id),
+        social_competitors_task,
+    )
+    logger.info("run_company_scrapes_parallel: all done for company_id=%s", company_id)
+
+
+async def run_social_for_competitor(
+    company_id: str,
+    competitor_id: str,
+    competitor_name: str,
+    location: str,
+    profile_id: str | None,
+) -> None:
+    """Run social scrapes (X, Instagram, Reddit) for one competitor; create scrape_runs with competitor_id and persist to social_items."""
+    supabase = get_supabase_admin()
+    n_social = len(SOCIAL_SOURCES_ORDERED)
+    rows = [
+        {"company_id": company_id, "competitor_id": competitor_id, "type": "social", "status": "running", "metadata": {"source": s}}
+        for s in SOCIAL_SOURCES_ORDERED
+    ]
+    insert_result = supabase.table("scrape_runs").insert(rows).execute()
+    run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
+    if len(run_ids) != n_social:
+        logger.warning("run_social_for_competitor: failed to create %d run rows for competitor_id=%s", n_social, competitor_id)
+        return
+
+    query = competitor_name
+
+    async def run_one(run_id: str, source: str) -> None:
+        logger.info("run_social_for_competitor: %s starting for %s", source, query[:50])
+        session_id, live_url = await create_session(profile_id)
+        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        try:
+            runner = SOCIAL_RUNNERS[source]
+            out, _ = await runner(
+                query, location=location,
+                profile_id=profile_id, session_id=session_id, live_url=live_url,
+            )
+            if out and out.results:
+                for item in out.results:
+                    supabase.table("social_items").insert({
+                        "company_id": company_id,
+                        "competitor_id": competitor_id,
+                        "source": source,
+                        "handle_or_author": (item.handle_or_author or "")[:500],
+                        "display_name": (item.display_name or "")[:500],
+                        "text": (item.text or "")[:2000],
+                        "url": (item.url or "")[:2000],
+                    }).execute()
+            supabase.table("scrape_runs").update({
+                "status": "done",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+            logger.info("run_social_for_competitor: %s done for %s", source, query[:50])
+        except Exception as e:
+            logger.warning("run_social_for_competitor: %s failed for %s: %s", source, query[:50], e)
+            supabase.table("scrape_runs").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+
+    await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(n_social)])
+    logger.info("run_social_for_competitor: all %d social sources finished for %s", n_social, query[:50])
+
+
+async def run_social_for_all_competitors(
+    company_id: str,
+    social_competitors: list[tuple[str, str]],
+    location: str,
+    profile_id: str | None,
+) -> None:
+    """Run social scrapes for each competitor in parallel (4 competitors × 3 platforms at once)."""
+    if not social_competitors:
+        return
+    logger.info("run_social_for_all_competitors: starting %d competitors", len(social_competitors))
+    await asyncio.gather(*[
+        run_social_for_competitor(company_id, cid, name, location, profile_id)
+        for cid, name in social_competitors
+    ])
+    logger.info("run_social_for_all_competitors: all %d competitors finished", len(social_competitors))
+
+
 async def run_social_for_company(
     company_id: str,
     query: str,
     location: str,
     profile_id: str | None,
 ) -> None:
-    """Run social scrapes (X, LinkedIn, Instagram, Reddit) in parallel; create scrape_runs with live_url and persist to social_items."""
+    """Run social scrapes (X, Instagram, Reddit) for our company only; scrape_runs have competitor_id=null."""
     supabase = get_supabase_admin()
+    n_social = len(SOCIAL_SOURCES_ORDERED)
     rows = [
         {"company_id": company_id, "type": "social", "status": "running", "metadata": {"source": s}}
         for s in SOCIAL_SOURCES_ORDERED
     ]
     insert_result = supabase.table("scrape_runs").insert(rows).execute()
     run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
-    if len(run_ids) != 4:
-        logger.warning("run_social_for_company: failed to create 4 run rows for company_id=%s", company_id)
+    if len(run_ids) != n_social:
+        logger.warning("run_social_for_company: failed to create %d run rows for company_id=%s", n_social, company_id)
         return
 
     async def run_one(run_id: str, source: str) -> None:
@@ -171,8 +286,81 @@ async def run_social_for_company(
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
 
-    await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(4)])
-    logger.info("run_social_for_company: all 4 social sources finished for company_id=%s", company_id)
+    await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(n_social)])
+    logger.info("run_social_for_company: all %d social sources finished for company_id=%s", n_social, company_id)
+
+
+async def run_reviews_for_place(
+    company_id: str,
+    place_query: str,
+    location: str,
+    profile_id: str | None,
+) -> None:
+    """Run one Google and one Yelp review scrape for a single company; only that company's reviews."""
+    supabase = get_supabase_admin()
+    rows = [
+        {"company_id": company_id, "type": f"reviews_{source}", "status": "running"}
+        for source in REVIEW_SOURCES_ORDERED
+    ]
+    insert_result = supabase.table("scrape_runs").insert(rows).execute()
+    run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
+    if len(run_ids) != 2:
+        logger.warning("run_reviews_for_place: failed to create 2 run rows for place=%s", place_query[:50])
+        return
+
+    async def run_one(run_id: str, source: str) -> None:
+        logger.info("run_reviews_for_place: %s starting for %s", source, place_query[:50])
+        session_id, live_url = await create_session(profile_id)
+        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        try:
+            runner = REVIEW_RUNNERS[source]
+            out, _ = await runner(
+                place_query, location=location,
+                profile_id=profile_id, session_id=session_id, live_url=live_url,
+            )
+            if out and out.results:
+                for item in out.results:
+                    supabase.table("review_items").insert({
+                        "company_id": company_id,
+                        "source": source,
+                        "place_name": (place_query or item.place_name or "")[:500],
+                        "rating": (item.rating or "")[:100],
+                        "review_text": (item.review_text or "")[:5000],
+                        "reviewer_name": (item.reviewer_name or "")[:500],
+                        "url": (item.url or "")[:2000],
+                    }).execute()
+            supabase.table("scrape_runs").update({
+                "status": "done",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+            logger.info("run_reviews_for_place: %s done for %s", source, place_query[:50])
+        except Exception as e:
+            logger.warning("run_reviews_for_place: %s failed for %s: %s", source, place_query[:50], e)
+            supabase.table("scrape_runs").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+
+    await asyncio.gather(*[run_one(run_ids[i], REVIEW_SOURCES_ORDERED[i]) for i in range(2)])
+    logger.info("run_reviews_for_place: Google + Yelp finished for %s", place_query[:50])
+
+
+async def run_reviews_for_all_places(
+    company_id: str,
+    place_queries: list[str],
+    location: str,
+    profile_id: str | None,
+) -> None:
+    """Run Google + Yelp reviews for each company (your company + all competitors); one run per company per source."""
+    if not place_queries:
+        return
+    logger.info("run_reviews_for_all_places: starting %d places (Google + Yelp each)", len(place_queries))
+    await asyncio.gather(*[
+        run_reviews_for_place(company_id, q, location, profile_id)
+        for q in place_queries
+    ])
+    logger.info("run_reviews_for_all_places: finished all %d places", len(place_queries))
 
 
 def aggregate_most_frequent_pros_cons(pros_cons_list: list[list[str]], top_n: int = 5) -> list[str]:

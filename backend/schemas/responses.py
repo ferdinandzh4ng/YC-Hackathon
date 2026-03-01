@@ -28,6 +28,7 @@ class CompanyResponse(BaseModel):
     website: str | None
     location: str | None
     created_at: str
+    last_updated: str | None = None
 
 
 class CompetitorResponse(BaseModel):

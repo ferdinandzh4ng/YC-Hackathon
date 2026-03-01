@@ -1,8 +1,10 @@
 """
-Website agents: general web search for competitors, and scraping competitor sites.
+Website agents: competitor discovery (Anthropic) and scraping competitor sites.
 Returns structured summary, rating (compelled to buy), pros/cons + live_url.
 """
+import json
 import logging
+import os
 
 from pydantic import BaseModel
 
@@ -17,34 +19,85 @@ class CompetitorSiteItem(BaseModel):
     rating_compelled_to_buy: str  # e.g. "7/10" or "high"
     pros: list[str]
     cons: list[str]
+    name: str | None = None  # business name (for OpenAI competitor search)
 
 
 class CompetitorSiteResults(BaseModel):
     results: list[CompetitorSiteItem]
 
 
-# ----- Web search for competitors -----
+# ----- Competitor discovery (Anthropic) -----
 
-SEARCH_TASK_TEMPLATE = """Use a search engine (Google or Bing) to search for "{query}" in "{location}".
-From the top results, identify competitor businesses or relevant sites. For each, extract: url, a short summary, a rating of how compelled a customer would be to buy (e.g. 1-10 or low/medium/high), pros (list), and cons (list).
-Return up to 10 items."""
+ANTHROPIC_COMPETITOR_SYSTEM = """You are a research assistant. Given a business name, market, and optional location, return a JSON array of direct competitors that are on the SAME SCALE as the business.
 
-def _search_task(query: str, location: str) -> str:
-    return SEARCH_TASK_TEMPLATE.format(query=query, location=location or "the specified area")
+Critical: Match the business size and type. If the business is a local shop, cafe, or small business, return only other local or similarly small competitors in that area—do NOT include national chains (e.g. no Starbucks, McDonald's, or big brands when the company is a local cafe). If the business is a regional chain, return other regional players. If it is national, then national competitors are fine.
 
-def _search_start_url(query: str, location: str) -> str:
-    from urllib.parse import quote_plus
-    q = f"{query} {location}".strip() if location else query
-    return f"https://www.google.com/search?q={quote_plus(q)}"
+Each item must have: "name" (business or brand name) and "url" (official website URL, must start with http:// or https://).
+Return up to 4 competitors. Use your knowledge; if you are unsure of a URL, use a plausible one or omit that competitor.
+Reply with only valid JSON, no markdown or explanation: [{"name": "...", "url": "..."}, ...]"""
+
 
 async def run_competitor_search(query: str, location: str = "", profile_id: str | None = None) -> tuple[CompetitorSiteResults | None, str | None]:
-    logger.info("run_competitor_search: starting query=%r location=%r", query, location)
-    task = _search_task(query, location)
-    start_url = _search_start_url(query, location)
-    out, live_url = await run_task(task, CompetitorSiteResults, start_url=start_url, allowed_domains=["google.com", "www.google.com", "bing.com", "www.bing.com"], profile_id=profile_id)
-    count = len(out.results) if out else 0
-    logger.info("run_competitor_search: finished, got %d results", count)
-    return out, live_url
+    """Find competitors via Anthropic Claude (no browser). Returns names and URLs."""
+    logger.info("run_competitor_search: starting Anthropic call query=%r location=%r", query, location)
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.warning("run_competitor_search: ANTHROPIC_API_KEY not set, returning no results")
+        return CompetitorSiteResults(results=[]), None
+
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
+    try:
+        from anthropic import AsyncAnthropic
+        client = AsyncAnthropic(api_key=api_key)
+        user = f"Business/market: {query}. Location: {location}" if location else f"Business/market: {query}."
+        resp = await client.messages.create(
+            model=model,
+            max_tokens=1024,
+            system=ANTHROPIC_COMPETITOR_SYSTEM,
+            messages=[{"role": "user", "content": user}],
+        )
+        content = ""
+        for block in (resp.content or []):
+            if hasattr(block, "text"):
+                content = block.text or ""
+                break
+            if isinstance(block, dict) and block.get("type") == "text":
+                content = block.get("text") or ""
+                break
+        content = content.strip()
+        if not content:
+            return CompetitorSiteResults(results=[]), None
+        if content.startswith("```"):
+            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        raw = json.loads(content)
+        if not isinstance(raw, list):
+            raw = []
+        results: list[CompetitorSiteItem] = []
+        for item in raw[:4]:
+            if not isinstance(item, dict):
+                continue
+            url = (item.get("url") or "").strip()
+            if not url or not (url.startswith("http://") or url.startswith("https://")):
+                continue
+            name = (item.get("name") or url).strip()
+            results.append(CompetitorSiteItem(
+                url=url,
+                summary=name,
+                rating_compelled_to_buy="",
+                pros=[],
+                cons=[],
+                name=name,
+            ))
+        out = CompetitorSiteResults(results=results)
+        logger.info("run_competitor_search: finished, got %d results", len(results))
+        return out, None
+    except json.JSONDecodeError as e:
+        logger.warning("run_competitor_search: Anthropic JSON parse failed: %s", e)
+        return CompetitorSiteResults(results=[]), None
+    except Exception as e:
+        logger.warning("run_competitor_search: Anthropic call failed: %s", e, exc_info=True)
+        return None, None
 
 
 # ----- Scrape specific competitor URLs -----

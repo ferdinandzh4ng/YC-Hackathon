@@ -44,8 +44,9 @@ from schemas.responses import (
 from services.company_service import (
     get_aggregated_feedback_for_company,
     get_rankings_for_company,
-    run_all_competitor_site_scrapes_parallel,
-    run_social_for_company,
+    run_company_scrapes_parallel,
+    run_four_personas_for_competitor,
+    run_reviews_for_all_places,
 )
 
 app = FastAPI(
@@ -273,7 +274,7 @@ async def scrape_websites(body: WebsitesScrapeRequest) -> WebsitesScrapeResponse
 # ---------- Authenticated company APIs ----------
 
 
-def _company_to_response(row: dict[str, Any]) -> CompanyResponse:
+def _company_to_response(row: dict[str, Any], last_updated: str | None = None) -> CompanyResponse:
     return CompanyResponse(
         id=str(row["id"]),
         name=row["name"],
@@ -281,6 +282,7 @@ def _company_to_response(row: dict[str, Any]) -> CompanyResponse:
         website=row.get("website") or row.get("url"),
         location=row.get("location"),
         created_at=row.get("created_at", ""),
+        last_updated=last_updated,
     )
 
 
@@ -332,7 +334,20 @@ async def create_company(
     logger.info("create_company: competitor search done, found %d results", len(results))
     profile_id = DEFAULT_PROFILE_ID
     competitor_tuples: list[tuple[str, str]] = []
-    for item in results[:5]:  # cap at 5 competitors
+    social_competitors: list[tuple[str, str]] = []
+
+    # Add user's own site first (so we scrape 5 sites total: your site + 4 competitors)
+    company_website = (body.website or "").strip()
+    if company_website:
+        self_ins = supabase.table("competitors").insert({
+            "company_id": company_id,
+            "url": company_website,
+            "name": body.name or "Your site",
+        }).execute()
+        if self_ins.data and len(self_ins.data) > 0:
+            competitor_tuples.append((str(self_ins.data[0]["id"]), company_website))
+
+    for item in results[:4]:  # cap at 4 competitors (5 sites total with your site)
         url = (item.get("url") or "").strip()
         if not url:
             continue
@@ -346,20 +361,52 @@ async def create_company(
             continue
         competitor_id = str(comp_ins.data[0]["id"])
         competitor_tuples.append((competitor_id, url))
-    if competitor_tuples:
-        background_tasks.add_task(run_all_competitor_site_scrapes_parallel, company_id, competitor_tuples, profile_id)
-    background_tasks.add_task(run_social_for_company, company_id, query, location, profile_id)
-    logger.info("create_company: saved %d competitors, queued all site scrapes in parallel + social (all in background). Returning.", len(competitor_tuples))
+        social_competitors.append((competitor_id, name))
+
+    background_tasks.add_task(
+        run_company_scrapes_parallel,
+        company_id,
+        query,
+        location,
+        competitor_tuples,
+        social_competitors,
+        profile_id,
+    )
+    logger.info("create_company: saved %d sites, queued site + reviews + social (yours + %d competitors, all at once). Returning.", len(competitor_tuples), len(social_competitors))
     return _company_to_response(company)
 
 
 @app.get("/companies", response_model=CompanyListResponse)
 async def list_companies(user_id: Annotated[str, Depends(get_current_user_id)]):
-    """List companies for the current user."""
+    """List companies for the current user, with last_updated from most recent scrape run."""
     supabase = get_supabase_admin()
     r = supabase.table("companies").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
-    companies = [_company_to_response(row) for row in (r.data or [])]
+    rows = r.data or []
+    if not rows:
+        return CompanyListResponse(companies=[])
+    company_ids = [str(c["id"]) for c in rows]
+    runs = supabase.table("scrape_runs").select("company_id, completed_at").in_("company_id", company_ids).order("completed_at", desc=True).execute()
+    last_updated_map: dict[str, str] = {}
+    for run in (runs.data or []):
+        cid = str(run.get("company_id", ""))
+        if cid and cid not in last_updated_map and run.get("completed_at"):
+            last_updated_map[cid] = str(run["completed_at"])
+    companies = [_company_to_response(row, last_updated=last_updated_map.get(str(row["id"]))) for row in rows]
     return CompanyListResponse(companies=companies)
+
+
+@app.delete("/companies/{company_id}", status_code=204)
+async def delete_company(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Delete a company (and its competitors, runs, feedback, reviews, social items via cascade)."""
+    supabase = get_supabase_admin()
+    existing = supabase.table("companies").select("id").eq("id", company_id).eq("user_id", user_id).execute()
+    if not existing.data or len(existing.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    supabase.table("companies").delete().eq("id", company_id).eq("user_id", user_id).execute()
+    return None
 
 
 @app.get("/companies/{company_id}", response_model=CompanyDetailResponse)
@@ -438,9 +485,11 @@ def _enqueue_rescrape_for_companies(
         company_id = str(row["id"])
         name = (row.get("name") or "").strip()
         location = (row.get("location") or "").strip()
-        background_tasks.add_task(run_reviews_for_company, company_id, name, location, profile_id)
-        comps = supabase.table("competitors").select("id, url").eq("company_id", company_id).execute()
-        for c in (comps.data or []):
+        comps = supabase.table("competitors").select("id, url, name").eq("company_id", company_id).execute()
+        comp_list = comps.data or []
+        review_places = [name] + [(c.get("name") or c.get("url") or "").strip() for c in comp_list if (c.get("name") or c.get("url") or "").strip()]
+        background_tasks.add_task(run_reviews_for_all_places, company_id, review_places, location, profile_id)
+        for c in comp_list:
             comp_id = str(c["id"])
             url = (c.get("url") or "").strip()
             if url:

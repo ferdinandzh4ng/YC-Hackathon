@@ -7,12 +7,13 @@ import {
   Plus,
   ArrowRight,
   Users,
-  TrendingUp,
   X,
   Loader2,
   MapPin,
+  Calendar,
+  Trash2,
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, deleteCompany } from "../lib/api";
 import type { Company } from "../lib/api";
 import { createClient } from "../lib/supabase";
 
@@ -28,6 +29,8 @@ export default function CompaniesPage() {
   const [website, setWebsite] = useState("");
   const [location, setLocation] = useState("");
   const [geoLoading, setGeoLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const loadCompanies = useCallback(async () => {
     try {
@@ -102,6 +105,18 @@ export default function CompaniesPage() {
     router.refresh();
   };
 
+  const handleDeleteCompany = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      await deleteCompany(deleteTarget.id);
+      setCompanies((prev) => prev.filter((c) => c.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="px-8 pt-8 pb-10">
       <motion.div
@@ -171,6 +186,7 @@ export default function CompaniesPage() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.08 + index * 0.06, duration: 0.4 }}
+                className="relative"
               >
                 <button
                   type="button"
@@ -191,29 +207,95 @@ export default function CompaniesPage() {
                     </div>
                     <ArrowRight size={16} className="text-zinc-300 group-hover:text-zinc-500 group-hover:translate-x-0.5 transition-all mt-1" />
                   </div>
-                  <p className="text-[13px] text-zinc-500 leading-relaxed mb-4">
-                    {company.website ? `${company.website}${company.location ? ` · ${company.location}` : ""}` : company.location || "No website or location set."}
-                  </p>
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-col gap-1.5 mb-4 text-[12px] text-zinc-500">
                     <div className="flex items-center gap-1.5">
-                      <Users size={12} className="text-zinc-400" />
-                      <span className="text-[12px] font-medium text-zinc-600">
-                        View details
+                      <Calendar size={12} className="text-zinc-400" />
+                      <span>
+                        Created {company.created_at ? new Date(company.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-100 rounded-full">
-                      <TrendingUp size={10} className="text-amber-600" />
-                      <span className="text-[10px] font-semibold text-amber-700">
-                        Scrapers may be running
+                    <div className="flex items-center gap-1.5">
+                      <Calendar size={12} className="text-zinc-400" />
+                      <span>
+                        Last updated {company.last_updated ? new Date(company.last_updated).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"}
                       </span>
                     </div>
                   </div>
+                  <div className="flex items-center gap-1.5">
+                    <Users size={12} className="text-zinc-400" />
+                    <span className="text-[12px] font-medium text-zinc-600">
+                      View details
+                    </span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTarget(company);
+                  }}
+                  className="absolute top-3 right-3 w-8 h-8 rounded-lg flex items-center justify-center text-zinc-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors"
+                  title="Delete company"
+                >
+                  <Trash2 size={14} />
                 </button>
               </motion.div>
             ))}
           </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {deleteTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40"
+            onClick={() => !deleting && setDeleteTarget(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm"
+            >
+              <p className="text-[15px] font-medium text-zinc-900 mb-1">
+                Delete company?
+              </p>
+              <p className="text-[13px] text-zinc-500 mb-5">
+                This will permanently remove <strong>{deleteTarget.name}</strong> and all its competitor data, runs, and feedback.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  type="button"
+                  onClick={() => !deleting && setDeleteTarget(null)}
+                  disabled={deleting}
+                  className="px-4 py-2 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteCompany}
+                  disabled={deleting}
+                  className="px-4 py-2 text-[13px] font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-60 flex items-center gap-2"
+                >
+                  {deleting ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      Deleting…
+                    </>
+                  ) : (
+                    "Delete"
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {overlayOpen && (
@@ -312,7 +394,14 @@ export default function CompaniesPage() {
                     disabled={submitLoading}
                     className="flex-1 py-2.5 bg-black text-white text-[14px] font-medium rounded-lg hover:bg-zinc-800 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
-                    {submitLoading ? <Loader2 size={16} className="animate-spin" /> : "Add company"}
+                    {submitLoading ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        Finding competitors…
+                      </>
+                    ) : (
+                      "Add company"
+                    )}
                   </button>
                 </div>
               </form>
