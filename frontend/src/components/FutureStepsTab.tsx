@@ -74,7 +74,7 @@ export default function FutureStepsTab({ companyId, companyName = "" }: FutureSt
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="max-w-4xl"
+      className="w-full max-w-6xl mx-auto"
     >
       <div className="flex items-center gap-2.5 mb-2">
         <div className="w-6 h-6 rounded-md bg-zinc-200 flex items-center justify-center">
@@ -111,47 +111,82 @@ export default function FutureStepsTab({ companyId, companyName = "" }: FutureSt
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.08, duration: 0.35 }}
-                  className="relative flex items-stretch gap-6 py-4"
+                  className="relative grid grid-cols-[1fr_auto_1fr] items-start gap-6 py-5"
                 >
-                  {/* Date/step block on the timeline */}
+                  {/* Left card */}
+                  {isLeft ? (
+                    <div className="pr-8">
+                      <div className="bg-white rounded-xl border border-zinc-200 shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden hover:border-zinc-300 transition-colors h-full">
+                        <div className="p-5">
+                          <h3 className="text-[15px] font-semibold text-zinc-900 mb-2">
+                            {step.title}
+                          </h3>
+                          <p className="text-[13px] text-zinc-600 leading-snug mb-4">
+                            {step.description}
+                          </p>
+                          {step.evidence && step.evidence.length > 0 && (
+                            <div className="pt-3 border-t border-zinc-100">
+                              <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
+                                Evidence from your data
+                              </p>
+                              <ul className="space-y-1">
+                                {step.evidence.map((ev, i) => (
+                                  <li key={i} className="text-[12px] text-zinc-500 flex gap-1.5">
+                                    <span className="text-zinc-300 shrink-0">•</span>
+                                    <span>{ev}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div />
+                  )}
+
+                  {/* Center step marker */}
                   <div
                     className={`absolute left-1/2 -translate-x-1/2 z-10 flex flex-col items-center justify-center w-16 rounded-lg bg-zinc-100 border border-zinc-200/80 px-2 py-2 shrink-0`}
                   >
                     <span className="text-[18px] font-bold text-zinc-800 leading-none">{stepNum}</span>
                     <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-wider">Step</span>
                   </div>
-                  {/* Card left or right */}
-                  <div
-                    className={`w-[calc(50%-2.5rem)] shrink-0 ${isLeft ? "pr-8 text-right" : "pl-8 ml-auto text-left"}`}
-                  >
-                    <div className="bg-white rounded-xl border border-zinc-200 shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden hover:border-zinc-300 transition-colors h-full">
-                      <div className="p-5">
-                        <h3 className="text-[15px] font-semibold text-zinc-900 mb-2">
-                          {step.title}
-                        </h3>
-                        <p className="text-[13px] text-zinc-600 leading-snug mb-4">
-                          {step.description}
-                        </p>
-                        {step.evidence && step.evidence.length > 0 && (
-                          <div className="pt-3 border-t border-zinc-100">
-                            <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
-                              Evidence from your data
-                            </p>
-                            <ul className="space-y-1">
-                              {step.evidence.map((ev, i) => (
-                                <li key={i} className="text-[12px] text-zinc-500 flex gap-1.5">
-                                  <span className="text-zinc-300 shrink-0">•</span>
-                                  <span>{ev}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
+                  <div className="w-16" />
+
+                  {/* Right card */}
+                  {!isLeft ? (
+                    <div className="pl-8">
+                      <div className="bg-white rounded-xl border border-zinc-200 shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden hover:border-zinc-300 transition-colors h-full">
+                        <div className="p-5">
+                          <h3 className="text-[15px] font-semibold text-zinc-900 mb-2">
+                            {step.title}
+                          </h3>
+                          <p className="text-[13px] text-zinc-600 leading-snug mb-4">
+                            {step.description}
+                          </p>
+                          {step.evidence && step.evidence.length > 0 && (
+                            <div className="pt-3 border-t border-zinc-100">
+                              <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">
+                                Evidence from your data
+                              </p>
+                              <ul className="space-y-1">
+                                {step.evidence.map((ev, i) => (
+                                  <li key={i} className="text-[12px] text-zinc-500 flex gap-1.5">
+                                    <span className="text-zinc-300 shrink-0">•</span>
+                                    <span>{ev}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  {/* Spacer on the other side */}
-                  <div className={`w-[calc(50%-2.5rem)] shrink-0 ${isLeft ? "pl-8" : "pr-8"}`} />
+                  ) : (
+                    <div />
+                  )}
                 </motion.li>
               );
             })}
