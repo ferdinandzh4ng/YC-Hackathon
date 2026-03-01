@@ -26,7 +26,7 @@ def main():
     req = Request(URL, data=json.dumps(BODY).encode(), method="POST")
     req.add_header("Content-Type", "application/json")
     try:
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req, timeout=900) as resp:
             for line in resp:
                 line = line.decode().strip()
                 if not line:
@@ -54,7 +54,7 @@ def main():
         print(f"Request failed: {e.reason}")
         return
     except TimeoutError:
-        print("Request timed out (increase timeout or check server).")
+        print("Request timed out after 15 min. Agent may still be running; check the live URL.")
         return
 
 
