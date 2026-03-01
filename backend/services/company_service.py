@@ -3,15 +3,21 @@ Company + competitor + scrape run logic.
 Starts 4 persona scrapes per competitor and stores results.
 """
 import asyncio
+import logging
 import os
 import re
+
+logger = logging.getLogger(__name__)
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
 from agents.base import create_session
+from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
 from db import get_supabase_admin
+
+SOCIAL_SOURCES_ORDERED = ["x", "linkedin", "instagram", "reddit"]
 
 DEFAULT_PROFILE_ID = os.getenv("BROWSER_USE_PROFILE_ID")
 
@@ -44,6 +50,7 @@ async def run_four_personas_for_competitor(
     profile_id: str | None,
 ) -> None:
     """Create 4 scrape_runs, run 4 persona tasks in parallel, store site_feedback and update runs."""
+    logger.info("run_four_personas: starting for competitor url=%s (company_id=%s)", url[:60], company_id)
     supabase = get_supabase_admin()
     persona_keys = list(PERSONAS.keys())
 
@@ -55,9 +62,11 @@ async def run_four_personas_for_competitor(
     insert_result = supabase.table("scrape_runs").insert(rows_to_insert).execute()
     run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
     if len(run_ids) != 4:
+        logger.warning("run_four_personas: failed to create 4 run rows for %s", url[:60])
         return
 
     async def run_one(run_id: str, persona_key: str) -> None:
+        logger.info("run_four_personas: persona %s starting for %s", persona_key, url[:50])
         session_id, live_url = await create_session(profile_id)
         supabase.table("scrape_runs").update({
             "live_url": live_url,
@@ -82,7 +91,9 @@ async def run_four_personas_for_competitor(
                 "status": "done",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
+            logger.info("run_four_personas: persona %s done for %s", persona_key, url[:50])
         except Exception as e:
+            logger.warning("run_four_personas: persona %s failed for %s: %s", persona_key, url[:50], e)
             supabase.table("scrape_runs").update({
                 "status": "failed",
                 "error_message": str(e),
@@ -90,6 +101,78 @@ async def run_four_personas_for_competitor(
             }).eq("id", run_id).execute()
 
     await asyncio.gather(*[run_one(run_ids[i], persona_keys[i]) for i in range(4)])
+    logger.info("run_four_personas: all 4 personas finished for %s", url[:60])
+
+
+async def run_all_competitor_site_scrapes_parallel(
+    company_id: str,
+    competitors: list[tuple[str, str]],
+    profile_id: str | None,
+) -> None:
+    """Run 4-persona site scrapes for all competitors in parallel (all 5 sites at once)."""
+    if not competitors:
+        return
+    logger.info("run_all_competitor_site_scrapes_parallel: starting %d competitors at once", len(competitors))
+    await asyncio.gather(*[
+        run_four_personas_for_competitor(company_id, cid, url, profile_id)
+        for cid, url in competitors
+    ])
+    logger.info("run_all_competitor_site_scrapes_parallel: all %d competitors finished", len(competitors))
+
+
+async def run_social_for_company(
+    company_id: str,
+    query: str,
+    location: str,
+    profile_id: str | None,
+) -> None:
+    """Run social scrapes (X, LinkedIn, Instagram, Reddit) in parallel; create scrape_runs with live_url and persist to social_items."""
+    supabase = get_supabase_admin()
+    rows = [
+        {"company_id": company_id, "type": "social", "status": "running", "metadata": {"source": s}}
+        for s in SOCIAL_SOURCES_ORDERED
+    ]
+    insert_result = supabase.table("scrape_runs").insert(rows).execute()
+    run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
+    if len(run_ids) != 4:
+        logger.warning("run_social_for_company: failed to create 4 run rows for company_id=%s", company_id)
+        return
+
+    async def run_one(run_id: str, source: str) -> None:
+        logger.info("run_social_for_company: %s starting for company_id=%s", source, company_id)
+        session_id, live_url = await create_session(profile_id)
+        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        try:
+            runner = SOCIAL_RUNNERS[source]
+            out, _ = await runner(
+                query, location=location,
+                profile_id=profile_id, session_id=session_id, live_url=live_url,
+            )
+            if out and out.results:
+                for item in out.results:
+                    supabase.table("social_items").insert({
+                        "company_id": company_id,
+                        "source": source,
+                        "handle_or_author": (item.handle_or_author or "")[:500],
+                        "display_name": (item.display_name or "")[:500],
+                        "text": (item.text or "")[:2000],
+                        "url": (item.url or "")[:2000],
+                    }).execute()
+            supabase.table("scrape_runs").update({
+                "status": "done",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+            logger.info("run_social_for_company: %s done for company_id=%s", source, company_id)
+        except Exception as e:
+            logger.warning("run_social_for_company: %s failed for company_id=%s: %s", source, company_id, e)
+            supabase.table("scrape_runs").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+
+    await asyncio.gather(*[run_one(run_ids[i], SOCIAL_SOURCES_ORDERED[i]) for i in range(4)])
+    logger.info("run_social_for_company: all 4 social sources finished for company_id=%s", company_id)
 
 
 def aggregate_most_frequent_pros_cons(pros_cons_list: list[list[str]], top_n: int = 5) -> list[str]:

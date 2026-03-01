@@ -4,10 +4,16 @@ Runs multiple browser instances concurrently per endpoint and returns live_urls 
 Authenticated company/competitor/runs APIs use Supabase.
 """
 import asyncio
+import logging
 import os
 from typing import Annotated, Any
 
+logger = logging.getLogger(__name__)
+# So add-company flow logs show up in terminal (competitor search, persona scrapes, etc.)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
 from dotenv import load_dotenv
+from postgrest.exceptions import APIError
 
 # Load .env from backend dir first (before db etc. read env)
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -38,7 +44,8 @@ from schemas.responses import (
 from services.company_service import (
     get_aggregated_feedback_for_company,
     get_rankings_for_company,
-    run_four_personas_for_competitor,
+    run_all_competitor_site_scrapes_parallel,
+    run_social_for_company,
 )
 
 app = FastAPI(
@@ -270,8 +277,8 @@ def _company_to_response(row: dict[str, Any]) -> CompanyResponse:
     return CompanyResponse(
         id=str(row["id"]),
         name=row["name"],
-        market=row["market"],
-        website=row.get("website"),
+        market=row.get("market", ""),
+        website=row.get("website") or row.get("url"),
         location=row.get("location"),
         created_at=row.get("created_at", ""),
     )
@@ -284,30 +291,48 @@ async def create_company(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ):
     """Create a company, run competitor search (query=name + ' ' + market, location), store competitors, start 4-persona site scrapes in background."""
+    logger.info("create_company: starting for name=%r market=%r", body.name, body.market)
     supabase = get_supabase_admin()
-    ins = supabase.table("companies").insert({
+    payload: dict[str, Any] = {
         "user_id": user_id,
         "name": body.name,
         "market": body.market,
         "website": body.website or None,
+        "url": (body.website or "").strip() or "",  # some schemas have NOT NULL url
         "location": body.location or None,
-    }).execute()
+    }
+    try:
+        ins = supabase.table("companies").insert(payload).execute()
+    except APIError as e:
+        err = str(e)
+        if "PGRST204" not in err:
+            raise
+        # Schema missing columns: try without optional fields, then minimal (include url if NOT NULL)
+        try:
+            minimal = {"user_id": user_id, "name": body.name, "url": (body.website or "").strip() or ""}
+            ins = supabase.table("companies").insert(minimal).execute()
+        except APIError:
+            ins = supabase.table("companies").insert({"user_id": user_id, "name": body.name}).execute()
     if not ins.data or len(ins.data) == 0:
         raise HTTPException(500, detail="Failed to create company")
     company = ins.data[0]
     company_id = str(company["id"])
+    logger.info("create_company: company saved id=%s, searching for competitors next", company_id)
 
     query = f"{body.name} {body.market}".strip()
     location = body.location or ""
     try:
         out, _ = await run_competitor_search(query, location=location, profile_id=DEFAULT_PROFILE_ID)
     except Exception as e:
+        logger.warning("create_company: competitor search failed: %s", e, exc_info=True)
         # Still return company; competitors can be added later
         return _company_to_response(company)
 
     results = out.model_dump()["results"] if out else []
+    logger.info("create_company: competitor search done, found %d results", len(results))
     profile_id = DEFAULT_PROFILE_ID
-    for item in results[:20]:  # cap at 20 competitors
+    competitor_tuples: list[tuple[str, str]] = []
+    for item in results[:5]:  # cap at 5 competitors
         url = (item.get("url") or "").strip()
         if not url:
             continue
@@ -320,8 +345,11 @@ async def create_company(
         if not comp_ins.data or len(comp_ins.data) == 0:
             continue
         competitor_id = str(comp_ins.data[0]["id"])
-        background_tasks.add_task(run_four_personas_for_competitor, company_id, competitor_id, url, profile_id)
-
+        competitor_tuples.append((competitor_id, url))
+    if competitor_tuples:
+        background_tasks.add_task(run_all_competitor_site_scrapes_parallel, company_id, competitor_tuples, profile_id)
+    background_tasks.add_task(run_social_for_company, company_id, query, location, profile_id)
+    logger.info("create_company: saved %d competitors, queued all site scrapes in parallel + social (all in background). Returning.", len(competitor_tuples))
     return _company_to_response(company)
 
 
@@ -329,7 +357,7 @@ async def create_company(
 async def list_companies(user_id: Annotated[str, Depends(get_current_user_id)]):
     """List companies for the current user."""
     supabase = get_supabase_admin()
-    r = supabase.table("companies").select("id, name, market, website, location, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
+    r = supabase.table("companies").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
     companies = [_company_to_response(row) for row in (r.data or [])]
     return CompanyListResponse(companies=companies)
 
@@ -379,7 +407,7 @@ async def list_company_runs(
     if not comp.data or len(comp.data) == 0:
         raise HTTPException(404, detail="Company not found")
 
-    runs = supabase.table("scrape_runs").select("id, competitor_id, type, status, live_url, started_at, completed_at, error_message").eq("company_id", company_id).order("started_at", desc=True).execute()
+    runs = supabase.table("scrape_runs").select("id, competitor_id, type, status, live_url, started_at, completed_at, error_message, metadata").eq("company_id", company_id).order("started_at", desc=True).execute()
     run_list = runs.data or []
     agents_running = sum(1 for r in run_list if r.get("status") == "running")
     run_responses = [
@@ -392,6 +420,7 @@ async def list_company_runs(
             started_at=str(r.get("started_at", "")),
             completed_at=str(r["completed_at"]) if r.get("completed_at") else None,
             error_message=r.get("error_message"),
+            metadata=r.get("metadata"),
         )
         for r in run_list
     ]

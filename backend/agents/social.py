@@ -36,7 +36,7 @@ def _x_start_url(query: str, location: str) -> str:
     q = f"{query} {location}".strip() if location else query
     return f"https://x.com/search?q={quote_plus(q)}"
 
-async def run_x(query: str, location: str = "", profile_id: str | None = None) -> tuple[SocialPostResults | None, str | None]:
+async def run_x(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
     task = _x_task(query, location)
     start_url = _x_start_url(query, location)
     # Map X schema (handle, display_name, tweet_text, url) -> SocialPostItem
@@ -47,7 +47,7 @@ async def run_x(query: str, location: str = "", profile_id: str | None = None) -
         url: str
     class XResults(BaseModel):
         results: list[XResult]
-    out, live_url = await run_task(task, XResults, start_url=start_url, allowed_domains=["twitter.com", "x.com"], profile_id=profile_id)
+    out, live_url = await run_task(task, XResults, start_url=start_url, allowed_domains=["twitter.com", "x.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
     if out is None:
         return None, live_url
     mapped = SocialPostResults(results=[SocialPostItem(handle_or_author=r.handle, display_name=r.display_name, text=r.tweet_text, url=r.url) for r in out.results])
@@ -78,10 +78,10 @@ class RedditResult(BaseModel):
 class RedditResults(BaseModel):
     results: list[RedditResult]
 
-async def run_reddit(query: str, location: str = "", profile_id: str | None = None) -> tuple[SocialPostResults | None, str | None]:
+async def run_reddit(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
     task = _reddit_task(query, location)
     start_url = _reddit_start_url(query, location)
-    out, live_url = await run_task(task, RedditResults, start_url=start_url, allowed_domains=["reddit.com", "www.reddit.com", "old.reddit.com"], profile_id=profile_id)
+    out, live_url = await run_task(task, RedditResults, start_url=start_url, allowed_domains=["reddit.com", "www.reddit.com", "old.reddit.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
     if out is None:
         return None, live_url
     mapped = SocialPostResults(results=[SocialPostItem(handle_or_author=r.author, display_name=r.subreddit, text=r.post_text or r.title, url=r.url) for r in out.results])
@@ -102,10 +102,10 @@ def _linkedin_start_url(query: str, location: str) -> str:
     q = f"{query} {location}".strip() if location else query
     return f"https://www.linkedin.com/search/results/all/?keywords={quote_plus(q)}"
 
-async def run_linkedin(query: str, location: str = "", profile_id: str | None = None) -> tuple[SocialPostResults | None, str | None]:
+async def run_linkedin(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
     task = _linkedin_task(query, location)
     start_url = _linkedin_start_url(query, location)
-    out, live_url = await run_task(task, SocialPostResults, start_url=start_url, allowed_domains=["linkedin.com", "www.linkedin.com"], profile_id=profile_id)
+    out, live_url = await run_task(task, SocialPostResults, start_url=start_url, allowed_domains=["linkedin.com", "www.linkedin.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
     return out, live_url
 
 
@@ -123,10 +123,10 @@ def _instagram_start_url(query: str, location: str) -> str:
     q = f"{query} {location}".strip() if location else query
     return f"https://www.instagram.com/explore/search/keyword/?query={quote_plus(q)}"
 
-async def run_instagram(query: str, location: str = "", profile_id: str | None = None) -> tuple[SocialPostResults | None, str | None]:
+async def run_instagram(query: str, location: str = "", profile_id: str | None = None, session_id: str | None = None, live_url: str | None = None) -> tuple[SocialPostResults | None, str | None]:
     task = _instagram_task(query, location)
     start_url = _instagram_start_url(query, location)
-    out, live_url = await run_task(task, SocialPostResults, start_url=start_url, allowed_domains=["instagram.com", "www.instagram.com"], profile_id=profile_id)
+    out, live_url = await run_task(task, SocialPostResults, start_url=start_url, allowed_domains=["instagram.com", "www.instagram.com"], profile_id=profile_id, session_id=session_id, live_url=live_url)
     return out, live_url
 
 

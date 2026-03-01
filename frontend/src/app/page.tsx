@@ -33,16 +33,22 @@ export default function CompaniesPage() {
     try {
       const res = await apiFetch<{ companies: Company[] }>("/companies");
       setCompanies(res.companies);
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && (err.message.includes("sign in") || err.message.includes("Unauthorized"))) {
+        router.replace("/login");
+        return;
+      }
       setCompanies([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     loadCompanies();
-  }, [loadCompanies]);
+    // Intentionally run once on mount; loadCompanies is stable enough (router is stable)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getGeolocation = () => {
     setGeoLoading(true);
@@ -66,7 +72,7 @@ export default function CompaniesPage() {
     setSubmitError("");
     setSubmitLoading(true);
     try {
-      await apiFetch<Company>("/companies", {
+      const company = await apiFetch<Company>("/companies", {
         method: "POST",
         body: JSON.stringify({
           name: name.trim(),
@@ -81,6 +87,7 @@ export default function CompaniesPage() {
       setWebsite("");
       setLocation("");
       await loadCompanies();
+      router.push(`/company/${company.id}?tab=scrapers`);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Failed to add company");
     } finally {

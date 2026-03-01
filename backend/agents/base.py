@@ -3,7 +3,10 @@ Shared Browser Use Cloud client and session helpers.
 Runs a single task with a dedicated session and returns output + live_url.
 Supports optional pre-created session (for streaming: send live_url first, then run).
 """
+import logging
 from typing import Any, TypeVar
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 
@@ -52,10 +55,12 @@ async def run_task(
     if session_id is not None:
         run_kwargs["session_id"] = session_id
 
+    logger.info("run_task: starting browser task (start_url=%s)", (start_url or "")[:80])
     run = client.run(task, **run_kwargs)
     async for _ in run:
         pass
     result = run.result
+    logger.info("run_task: browser task finished")
     if not result:
         return None, live_url
     out = result.output

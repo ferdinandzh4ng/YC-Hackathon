@@ -2,13 +2,22 @@ import { createClient } from "./supabase";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+let _supabase: ReturnType<typeof createClient> | null = null;
+function getSupabase() {
+  if (!_supabase) _supabase = createClient();
+  return _supabase;
+}
+
 export async function getAccessToken(): Promise<string | null> {
-  const supabase = createClient();
+  const supabase = getSupabase();
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.access_token) return session.access_token;
-  // Try refreshing in case token expired
   const { data: { session: refreshed } } = await supabase.auth.refreshSession();
-  return refreshed?.access_token ?? null;
+  if (refreshed?.access_token) return refreshed.access_token;
+  // Client may not have session yet right after nav (cookies/hydration)
+  await new Promise((r) => setTimeout(r, 300));
+  const { data: { session: retry } } = await supabase.auth.getSession();
+  return retry?.access_token ?? null;
 }
 
 export async function apiFetch<T>(
@@ -98,6 +107,7 @@ export interface ScrapeRun {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
+  metadata?: { source?: string } | null;
 }
 
 export interface ScrapeRunsResponse {

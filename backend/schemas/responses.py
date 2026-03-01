@@ -45,6 +45,7 @@ class ScrapeRunResponse(BaseModel):
     started_at: str
     completed_at: str | None
     error_message: str | None
+    metadata: dict[str, Any] | None = None
 
 
 class AggregatedFeedback(BaseModel):

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { BarChart3, Clock, Users, Loader2 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
@@ -18,11 +18,18 @@ type Tab = "analytics" | "scrapers";
 export default function CompanyDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const id = params.id as string;
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [runs, setRuns] = useState<ScrapeRunsResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<Tab>("analytics");
+  const tabParam = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState<Tab>(
+    () => (tabParam === "scrapers" ? "scrapers" : "analytics")
+  );
+  useEffect(() => {
+    if (tabParam === "scrapers" || tabParam === "analytics") setActiveTab(tabParam);
+  }, [tabParam]);
 
   const loadDetail = useCallback(async () => {
     if (!id) return;

@@ -2,7 +2,11 @@
 Website agents: general web search for competitors, and scraping competitor sites.
 Returns structured summary, rating (compelled to buy), pros/cons + live_url.
 """
+import logging
+
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from .base import run_task
 
@@ -34,9 +38,13 @@ def _search_start_url(query: str, location: str) -> str:
     return f"https://www.google.com/search?q={quote_plus(q)}"
 
 async def run_competitor_search(query: str, location: str = "", profile_id: str | None = None) -> tuple[CompetitorSiteResults | None, str | None]:
+    logger.info("run_competitor_search: starting query=%r location=%r", query, location)
     task = _search_task(query, location)
     start_url = _search_start_url(query, location)
-    return await run_task(task, CompetitorSiteResults, start_url=start_url, allowed_domains=["google.com", "www.google.com", "bing.com", "www.bing.com"], profile_id=profile_id)
+    out, live_url = await run_task(task, CompetitorSiteResults, start_url=start_url, allowed_domains=["google.com", "www.google.com", "bing.com", "www.bing.com"], profile_id=profile_id)
+    count = len(out.results) if out else 0
+    logger.info("run_competitor_search: finished, got %d results", count)
+    return out, live_url
 
 
 # ----- Scrape specific competitor URLs -----
