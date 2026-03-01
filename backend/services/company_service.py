@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agents.base import create_session
+from agents.outreach import RUNNERS as OUTREACH_RUNNERS
 from agents.reviews import RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
@@ -362,6 +363,66 @@ async def run_reviews_for_all_places(
         for q in place_queries
     ])
     logger.info("run_reviews_for_all_places: finished all %d places", len(place_queries))
+
+
+async def run_outreach_for_company(
+    company_id: str,
+    competitor_handle: str,
+    sources: list[str],
+    company_name: str,
+    company_market: str,
+    limit: int = 20,
+    profile_id: str | None = None,
+) -> None:
+    """Run outreach agents (scrape followers + send DMs) in parallel; create scrape_runs and persist to outreach_items."""
+    supabase = get_supabase_admin()
+    rows = [
+        {"company_id": company_id, "type": "outreach", "status": "running", "metadata": {"source": s, "competitor_handle": competitor_handle}}
+        for s in sources
+    ]
+    insert_result = supabase.table("scrape_runs").insert(rows).execute()
+    run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
+    if len(run_ids) != len(sources):
+        logger.warning("run_outreach_for_company: failed to create %d run rows for company_id=%s", len(sources), company_id)
+        return
+
+    async def run_one(run_id: str, source: str) -> None:
+        logger.info("run_outreach_for_company: %s starting for company_id=%s handle=%s", source, company_id, competitor_handle)
+        session_id, live_url = await create_session(profile_id)
+        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        try:
+            runner = OUTREACH_RUNNERS[source]
+            out, _ = await runner(
+                competitor_handle, company_name, company_market,
+                limit=limit, profile_id=profile_id, session_id=session_id, live_url=live_url,
+            )
+            if out and out.results:
+                for item in out.results:
+                    supabase.table("outreach_items").insert({
+                        "company_id": company_id,
+                        "source": source,
+                        "competitor_handle": competitor_handle,
+                        "username": (item.username or "")[:500],
+                        "display_name": (item.display_name or "")[:500],
+                        "bio": (item.bio or "")[:2000],
+                        "dm_sent": item.dm_sent,
+                        "dm_text": (item.dm_text or "")[:2000],
+                    }).execute()
+            supabase.table("scrape_runs").update({
+                "status": "done",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+            logger.info("run_outreach_for_company: %s done for company_id=%s", source, company_id)
+        except Exception as e:
+            logger.warning("run_outreach_for_company: %s failed for company_id=%s: %s", source, company_id, e)
+            supabase.table("scrape_runs").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+
+    await asyncio.gather(*[run_one(run_ids[i], sources[i]) for i in range(len(sources))])
+    logger.info("run_outreach_for_company: all %d sources finished for company_id=%s", len(sources), company_id)
 
 
 def aggregate_most_frequent_pros_cons(pros_cons_list: list[list[str]], top_n: int = 5) -> list[str]:

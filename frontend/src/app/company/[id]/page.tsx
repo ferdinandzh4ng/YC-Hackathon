@@ -8,6 +8,7 @@ import Sidebar from "@/components/Sidebar";
 import AnalyticsTab from "@/components/AnalyticsTab";
 import ScrapersTab from "@/components/ScrapersTab";
 import SocialPostQualityTab from "@/components/SocialPostQualityTab";
+import OutreachTab from "@/components/OutreachTab";
 import {
   apiFetch,
   deleteCompany,
@@ -15,7 +16,7 @@ import {
   type ScrapeRunsResponse,
 } from "../../../lib/api";
 
-type Tab = "analytics" | "scrapers" | "social";
+type Tab = "analytics" | "scrapers" | "social" | "outreach";
 
 export default function CompanyDetailPage() {
   const params = useParams();
@@ -30,10 +31,10 @@ export default function CompanyDetailPage() {
   const agentsRunningRef = useRef(0);
   const tabParam = searchParams.get("tab");
   const [activeTab, setActiveTab] = useState<Tab>(
-    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "social" ? "social" : "analytics")
+    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "social" ? "social" : tabParam === "outreach" ? "outreach" : "analytics")
   );
   useEffect(() => {
-    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "social") setActiveTab(tabParam);
+    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "social" || tabParam === "outreach") setActiveTab(tabParam);
   }, [tabParam]);
 
   const loadDetail = useCallback(async () => {
@@ -292,7 +293,7 @@ export default function CompanyDetailPage() {
                 competitors={detail.competitors}
               />
             </motion.div>
-          ) : (
+          ) : activeTab === "social" ? (
             <motion.div
               key="social"
               initial={{ opacity: 0, y: 8 }}
@@ -314,6 +315,28 @@ export default function CompanyDetailPage() {
                   const next = new URLSearchParams(searchParams?.toString() ?? "");
                   next.set("tab", "scrapers");
                   router.replace(`/company/${id}?${next.toString()}`, { scroll: false });
+                }}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="outreach"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              <OutreachTab
+                outreachItems={detail.outreach_items ?? []}
+                companyName={company.name}
+                companyMarket={company.market}
+                companyId={company.id}
+                competitors={detail.competitors}
+                socialItems={detail.social_items}
+                runs={runs?.runs ?? []}
+                onRefresh={() => {
+                  loadDetail();
+                  loadRuns();
                 }}
               />
             </motion.div>

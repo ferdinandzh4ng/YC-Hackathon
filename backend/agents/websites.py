@@ -37,12 +37,27 @@ Return up to 4 competitors. Use your knowledge; if you are unsure of a URL, use 
 Reply with only valid JSON, no markdown or explanation: [{"name": "...", "url": "..."}, ...]"""
 
 
+def _extract_competitor_list(raw: list | dict) -> list[dict]:
+    """Normalize API response to a list of {name, url} dicts. Handles array or object with competitors/results/items."""
+    if isinstance(raw, list):
+        return raw
+    if not isinstance(raw, dict):
+        return []
+    for key in ("competitors", "results", "items"):
+        val = raw.get(key)
+        if isinstance(val, list):
+            return val
+    return []
+
+
 async def run_competitor_search(query: str, location: str = "", profile_id: str | None = None) -> tuple[CompetitorSiteResults | None, str | None]:
     """Find competitors via Anthropic Claude (no browser). Returns names and URLs."""
     logger.info("run_competitor_search: starting Anthropic call query=%r location=%r", query, location)
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        logger.warning("run_competitor_search: ANTHROPIC_API_KEY not set, returning no results")
+        logger.warning(
+            "run_competitor_search: ANTHROPIC_API_KEY not set. Add it to backend/.env to enable competitor discovery."
+        )
         return CompetitorSiteResults(results=[]), None
 
     model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -67,14 +82,17 @@ async def run_competitor_search(query: str, location: str = "", profile_id: str 
                 break
         content = content.strip()
         if not content:
+            logger.warning("run_competitor_search: empty response from model")
             return CompetitorSiteResults(results=[]), None
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        raw = json.loads(content)
-        if not isinstance(raw, list):
-            raw = []
+        # Strip markdown code fence if present
+        if "```" in content:
+            content = content.split("```", 1)[-1].rsplit("```", 1)[0].strip()
+            if content.startswith("json"):
+                content = content[4:].strip()
+        raw_parsed = json.loads(content)
+        raw_list = _extract_competitor_list(raw_parsed)
         results: list[CompetitorSiteItem] = []
-        for item in raw[:4]:
+        for item in raw_list[:4]:
             if not isinstance(item, dict):
                 continue
             url = (item.get("url") or "").strip()
@@ -89,11 +107,26 @@ async def run_competitor_search(query: str, location: str = "", profile_id: str 
                 cons=[],
                 name=name,
             ))
+        if not results and raw_list:
+            logger.warning(
+                "run_competitor_search: model returned %d items but none had valid url. Sample: %s",
+                len(raw_list),
+                content[:400],
+            )
+        elif not results:
+            logger.warning(
+                "run_competitor_search: no valid competitors parsed. Raw response (truncated): %s",
+                content[:500],
+            )
         out = CompetitorSiteResults(results=results)
         logger.info("run_competitor_search: finished, got %d results", len(results))
         return out, None
     except json.JSONDecodeError as e:
-        logger.warning("run_competitor_search: Anthropic JSON parse failed: %s", e)
+        logger.warning(
+            "run_competitor_search: Anthropic JSON parse failed: %s. Content: %s",
+            e,
+            (content[:400] if content else ""),
+        )
         return CompetitorSiteResults(results=[]), None
     except Exception as e:
         logger.warning("run_competitor_search: Anthropic call failed: %s", e, exc_info=True)

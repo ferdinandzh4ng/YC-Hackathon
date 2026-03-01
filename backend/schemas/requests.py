@@ -22,6 +22,15 @@ class WebsitesScrapeRequest(BaseModel):
     profile_id: str | None = Field(default=None, description="Optional Browser Use profile ID")
 
 
+class OutreachRequest(BaseModel):
+    sources: list[str] = Field(description="One or more of: x, instagram, facebook")
+    competitor_handle: str = Field(description="Competitor social handle (e.g. '@competitor' or 'competitor')")
+    company_name: str = Field(description="Your company name")
+    company_market: str = Field(description="Your company market / industry")
+    limit: int = Field(default=20, description="Max followers to DM per platform")
+    profile_id: str | None = Field(default=None, description="Optional Browser Use profile ID for logged-in sessions")
+
+
 class CompanyCreateRequest(BaseModel):
     name: str = Field(description="Company name")
     market: str = Field(description="Market / industry (free text)")

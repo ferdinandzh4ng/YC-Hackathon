@@ -21,6 +21,12 @@ class WebsitesScrapeResponse(BaseModel):
     errors: dict[str, str] = Field(default_factory=dict, description="Per-source error if any")
 
 
+class OutreachResponse(BaseModel):
+    results: dict[str, list[dict[str, Any]]] = Field(description="Per-source list of follower+DM results")
+    live_urls: dict[str, str] = Field(description="Per-source Browser Use Cloud live session URL")
+    errors: dict[str, str] = Field(default_factory=dict, description="Per-source error message if any")
+
+
 class CompanyResponse(BaseModel):
     id: str
     name: str
@@ -74,6 +80,7 @@ class CompanyDetailResponse(BaseModel):
     rankings: list[RankingItem]
     review_items: list[dict[str, Any]] = Field(default_factory=list)
     social_items: list[dict[str, Any]] = Field(default_factory=list)
+    outreach_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CompanyListResponse(BaseModel):

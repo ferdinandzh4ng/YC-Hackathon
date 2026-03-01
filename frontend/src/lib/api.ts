@@ -100,6 +100,18 @@ export interface SocialItem {
   url?: string | null;
 }
 
+export interface OutreachItem {
+  id?: string;
+  company_id?: string;
+  source: string;
+  competitor_handle?: string | null;
+  username?: string | null;
+  display_name?: string | null;
+  bio?: string | null;
+  dm_sent: boolean;
+  dm_text?: string | null;
+}
+
 export interface CompanyDetail {
   company: Company;
   competitors: Competitor[];
@@ -107,6 +119,7 @@ export interface CompanyDetail {
   rankings: RankingItem[];
   review_items: ReviewItem[];
   social_items: SocialItem[];
+  outreach_items: OutreachItem[];
 }
 
 export interface ScrapeRun {
@@ -118,7 +131,7 @@ export interface ScrapeRun {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
-  metadata?: { source?: string } | null;
+  metadata?: { source?: string; competitor_handle?: string } | null;
 }
 
 export interface ScrapeRunsResponse {

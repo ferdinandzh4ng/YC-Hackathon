@@ -23,17 +23,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from agents.base import create_session
+from agents.outreach import OUTREACH_SOURCES, RUNNERS as OUTREACH_RUNNERS
 from agents.reviews import REVIEW_SOURCES, RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS, SOCIAL_SOURCES
 from agents.websites import run_competitor_search
 from db import get_current_user_id, get_supabase_admin
-from schemas.requests import CompanyCreateRequest, ReviewsScrapeRequest, SocialScrapeRequest, WebsitesScrapeRequest
+from schemas.requests import CompanyCreateRequest, OutreachRequest, ReviewsScrapeRequest, SocialScrapeRequest, WebsitesScrapeRequest
 from schemas.responses import (
     AggregatedFeedback,
     CompanyDetailResponse,
     CompanyListResponse,
     CompanyResponse,
     CompetitorResponse,
+    OutreachResponse,
     RankingItem,
     ReviewsScrapeResponse,
     ScrapeRunResponse,
@@ -46,6 +48,7 @@ from services.company_service import (
     get_rankings_for_company,
     run_company_scrapes_parallel,
     run_four_personas_for_competitor,
+    run_outreach_for_company,
     run_reviews_for_all_places,
     run_social_for_company,
 )
@@ -272,6 +275,50 @@ async def scrape_websites(body: WebsitesScrapeRequest) -> WebsitesScrapeResponse
     return WebsitesScrapeResponse(results=results, live_urls=live_urls, errors=errors)
 
 
+@app.post("/scrape/outreach", response_model=OutreachResponse)
+async def scrape_outreach(body: OutreachRequest) -> OutreachResponse:
+    """Scrape competitor followers and send personalized DMs (X, Instagram, Facebook) in parallel."""
+    invalid = set(body.sources) - OUTREACH_SOURCES
+    if invalid:
+        raise HTTPException(422, detail=f"Invalid sources: {invalid}. Allowed: {list(OUTREACH_SOURCES)}")
+    if not body.sources:
+        raise HTTPException(422, detail="At least one source required")
+
+    profile = _profile_id(body.profile_id)
+
+    async def run_one(source: str):
+        runner = OUTREACH_RUNNERS[source]
+        try:
+            out, live_url = await runner(
+                body.competitor_handle, body.company_name, body.company_market,
+                limit=body.limit, profile_id=profile,
+            )
+            results = out.model_dump()["results"] if out else []
+            return source, results, live_url or "", None
+        except Exception as e:
+            return source, [], "", str(e)
+
+    tasks = [run_one(s) for s in body.sources]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results: dict[str, list[dict[str, Any]]] = {}
+    live_urls: dict[str, str] = {}
+    errors: dict[str, str] = {}
+
+    for item in outcomes:
+        if isinstance(item, Exception):
+            errors["_"] = str(item)
+            continue
+        source, res, live, err = item
+        results[source] = res
+        if live:
+            live_urls[source] = live
+        if err:
+            errors[source] = err
+
+    return OutreachResponse(results=results, live_urls=live_urls, errors=errors)
+
+
 # ---------- Authenticated company APIs ----------
 
 
@@ -434,6 +481,12 @@ async def get_company(
     social_rows = supabase.table("social_items").select("*").eq("company_id", company_id).execute()
     social_items = [dict(s) for s in (social_rows.data or [])]
 
+    try:
+        outreach_rows = supabase.table("outreach_items").select("*").eq("company_id", company_id).execute()
+        outreach_items = [dict(o) for o in (outreach_rows.data or [])]
+    except APIError:
+        outreach_items = []
+
     return CompanyDetailResponse(
         company=company,
         competitors=[CompetitorResponse(**c) for c in competitor_list],
@@ -441,6 +494,7 @@ async def get_company(
         rankings=[RankingItem(**r) for r in rankings],
         review_items=review_items,
         social_items=social_items,
+        outreach_items=outreach_items,
     )
 
 
@@ -493,6 +547,30 @@ async def list_company_runs(
         for r in run_list
     ]
     return ScrapeRunsListResponse(runs=run_responses, agents_running_count=agents_running)
+
+
+@app.post("/companies/{company_id}/outreach")
+async def start_outreach(
+    company_id: str,
+    body: OutreachRequest,
+    background_tasks: BackgroundTasks,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Start outreach (follower DMs) for a company. Runs in background."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    company = comp.data[0]
+    company_name = body.company_name or company.get("name", "")
+    company_market = body.company_market or company.get("market", "")
+    profile = _profile_id(body.profile_id)
+    background_tasks.add_task(
+        run_outreach_for_company,
+        company_id, body.competitor_handle, body.sources,
+        company_name, company_market, body.limit, profile,
+    )
+    return {"ok": True, "message": f"Outreach started for {len(body.sources)} source(s)"}
 
 
 def _enqueue_rescrape_for_companies(

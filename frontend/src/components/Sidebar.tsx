@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { BarChart3, Bot, Share2, Settings, ArrowLeft } from "lucide-react";
+import { BarChart3, Bot, Share2, Send, Settings, ArrowLeft } from "lucide-react";
 
 const tabs = [
   { icon: BarChart3, label: "Analytics", tab: "analytics" },
   { icon: Bot, label: "Scrapers", tab: "scrapers" },
   { icon: Share2, label: "Social", tab: "social" },
+  { icon: Send, label: "Outreach", tab: "outreach" },
 ];
 
 export default function Sidebar({
