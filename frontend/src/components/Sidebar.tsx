@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { BarChart3, Bot, Target, Settings, ArrowLeft } from "lucide-react";
+import { BarChart3, Bot, Target, Send, Settings, ArrowLeft } from "lucide-react";
 
 const tabs = [
   { icon: BarChart3, label: "Analytics", tab: "analytics" },
   { icon: Bot, label: "Scrapers", tab: "scrapers" },
   { icon: Target, label: "Future steps", tab: "future-steps" },
+  { icon: Send, label: "Outreach", tab: "outreach" },
 ];
 
 export default function Sidebar({
@@ -46,7 +47,7 @@ export default function Sidebar({
       </div>
 
       <Link
-        href="/"
+        href="/companies"
         className="flex items-center gap-2 px-5 py-3 text-[12px] text-zinc-400 hover:text-zinc-600 transition-colors border-b border-zinc-100 group"
       >
         <ArrowLeft

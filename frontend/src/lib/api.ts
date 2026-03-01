@@ -79,6 +79,20 @@ export interface RankingItem {
   rank: number;
 }
 
+export interface PersonaFeedback {
+  competitor_id: string;
+  url: string;
+  competitor_name: string | null;
+  persona: string;
+  persona_description: string;
+  rating_raw: string;
+  rating_numeric: number;
+  summary: string;
+  pros: string[];
+  cons: string[];
+  derivation: string[];
+}
+
 export interface ReviewItem {
   id?: string;
   company_id?: string;
@@ -100,13 +114,27 @@ export interface SocialItem {
   url?: string | null;
 }
 
+export interface OutreachItem {
+  id?: string;
+  company_id?: string;
+  source: string;
+  competitor_handle?: string | null;
+  username?: string | null;
+  display_name?: string | null;
+  bio?: string | null;
+  dm_sent: boolean;
+  dm_text?: string | null;
+}
+
 export interface CompanyDetail {
   company: Company;
   competitors: Competitor[];
   aggregated_feedback: AggregatedFeedback[];
   rankings: RankingItem[];
+  persona_feedback: PersonaFeedback[];
   review_items: ReviewItem[];
   social_items: SocialItem[];
+  outreach_items: OutreachItem[];
 }
 
 export interface ScrapeRun {
@@ -118,7 +146,7 @@ export interface ScrapeRun {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
-  metadata?: { source?: string } | null;
+  metadata?: { source?: string; competitor_handle?: string } | null;
 }
 
 export interface ScrapeRunsResponse {

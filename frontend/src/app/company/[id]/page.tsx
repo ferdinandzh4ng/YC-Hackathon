@@ -8,6 +8,8 @@ import Sidebar from "@/components/Sidebar";
 import AnalyticsTab from "@/components/AnalyticsTab";
 import ScrapersTab from "@/components/ScrapersTab";
 import FutureStepsTab from "@/components/FutureStepsTab";
+import SocialTab from "@/components/SocialTab";
+import OutreachTab from "@/components/OutreachTab";
 import {
   apiFetch,
   deleteCompany,
@@ -18,7 +20,8 @@ import {
 } from "../../../lib/api";
 import { exportCompanyReportPdf } from "../../../lib/exportPdf";
 
-type Tab = "analytics" | "scrapers" | "future-steps";
+type Tab = "analytics" | "scrapers" | "social" | "outreach" | "future-steps";
+
 
 export default function CompanyDetailPage() {
   const params = useParams();
@@ -34,10 +37,12 @@ export default function CompanyDetailPage() {
   const agentsRunningRef = useRef(0);
   const tabParam = searchParams.get("tab");
   const [activeTab, setActiveTab] = useState<Tab>(
-    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "future-steps" ? "future-steps" : "analytics")
+    () => (tabParam === "scrapers" ? "scrapers" : tabParam === "social" ? "social"  : tabParam === "outreach" ? "outreach" :tabParam === "future-steps" ? "future-steps" :  "analytics")
+
   );
   useEffect(() => {
-    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "future-steps") setActiveTab(tabParam);
+    if (tabParam === "scrapers" || tabParam === "analytics" || tabParam === "social" || tabParam === "future-steps" || tabParam === "outreach") setActiveTab(tabParam);
+
   }, [tabParam]);
 
   const loadDetail = useCallback(async () => {
@@ -46,7 +51,7 @@ export default function CompanyDetailPage() {
       const data = await apiFetch<CompanyDetail>(`/companies/${id}`);
       setDetail(data);
     } catch {
-      router.replace("/");
+      router.replace("/companies");
       return;
     } finally {
       setLoading(false);
@@ -264,6 +269,7 @@ export default function CompanyDetailPage() {
                   companyId={id}
                   rankings={detail.rankings}
                   aggregatedFeedback={detail.aggregated_feedback}
+                  personaFeedback={detail.persona_feedback}
                   reviewItems={detail.review_items}
                   socialItems={detail.social_items}
                   companyName={company.name}
@@ -317,7 +323,7 @@ export default function CompanyDetailPage() {
             >
               <FutureStepsTab companyId={id} companyName={company.name} />
             </motion.div>
-          ) : (
+          ) : activeTab === "scrapers" ? (
             <motion.div
               key="scrapers"
               initial={{ opacity: 0, y: 8 }}
@@ -329,6 +335,47 @@ export default function CompanyDetailPage() {
                 runs={runs?.runs ?? []}
                 agentsRunningCount={runs?.agents_running_count ?? 0}
                 competitors={detail.competitors}
+              />
+            </motion.div>
+          ) : activeTab === "social" ? (
+            <motion.div
+              key="social"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              <SocialTab
+                socialItems={detail.social_items}
+                runs={runs?.runs ?? []}
+                onSwitchToScrapers={() => {
+                  setActiveTab("scrapers");
+                  const next = new URLSearchParams(searchParams?.toString() ?? "");
+                  next.set("tab", "scrapers");
+                  router.replace(`/company/${id}?${next.toString()}`, { scroll: false });
+                }}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="outreach"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              <OutreachTab
+                outreachItems={detail.outreach_items ?? []}
+                companyName={company.name}
+                companyMarket={company.market}
+                companyId={company.id}
+                competitors={detail.competitors}
+                socialItems={detail.social_items}
+                runs={runs?.runs ?? []}
+                onRefresh={() => {
+                  loadDetail();
+                  loadRuns();
+                }}
               />
             </motion.div>
           )}

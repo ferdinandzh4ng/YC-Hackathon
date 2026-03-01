@@ -2,11 +2,11 @@
 
 import { useRef, useState, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Monitor, Star, MessageSquare, Share2, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react";
+import { Monitor, Star, MessageSquare, Share2, ExternalLink, ChevronLeft, ChevronRight, Bot } from "lucide-react";
 import RankingTable from "@/components/RankingTable";
 import UXFeedbackCarousel, { UXFeedback } from "@/components/UXFeedbackCarousel";
 import FrequentReviewsCarousel, { CompanyReviews } from "@/components/FrequentReviewsCarousel";
-import type { AggregatedFeedback, RankingItem, ReviewItem, SocialItem } from "../lib/api";
+import type { AggregatedFeedback, PersonaFeedback, RankingItem, ReviewItem, SocialItem } from "../lib/api";
 import { fetchPostingGuide, type PostingGuide } from "../lib/api";
 
 function aggregatedToUXFeedback(f: AggregatedFeedback): UXFeedback {
@@ -71,6 +71,79 @@ function reviewItemsToCompanyReviews(source: string, items: ReviewItem[]): Compa
 }
 
 const SOURCE_LABEL: Record<string, string> = { x: "X", instagram: "Instagram", facebook: "Facebook" };
+const PERSONA_LABELS: Record<string, string> = {
+  elderly: "Elderly Cautious",
+  new_user: "First-Time Visitor",
+  frustrated: "Frustrated User",
+  enthusiast: "Power User",
+};
+const STEP_TITLES = [
+  "Observed evidence",
+  "Persona interpretation",
+  "Score normalization",
+  "Final conclusion",
+];
+const POSITIVE_STEP_HINTS = ["positive", "supporting", "strong", "clear", "improved", "good", "high", "best"];
+const NEGATIVE_STEP_HINTS = ["concern", "friction", "risk", "negative", "slow", "poor", "weak", "drop", "issue"];
+
+type StepTone = "positive" | "negative" | "neutral";
+
+function classifyStepTone(step: string, rating: number): StepTone {
+  const lower = step.toLowerCase();
+  if (NEGATIVE_STEP_HINTS.some((k) => lower.includes(k))) return "negative";
+  if (POSITIVE_STEP_HINTS.some((k) => lower.includes(k))) return "positive";
+  if (lower.includes("normalized")) {
+    if (rating >= 7) return "positive";
+    if (rating <= 4) return "negative";
+  }
+  return "neutral";
+}
+
+function stepToneChip(tone: StepTone): { label: string; cls: string } {
+  if (tone === "positive") {
+    return {
+      label: "Positive indicator",
+      cls: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    };
+  }
+  if (tone === "negative") {
+    return {
+      label: "Negative indicator",
+      cls: "bg-rose-50 text-rose-700 border-rose-200",
+    };
+  }
+  return {
+    label: "Neutral indicator",
+    cls: "bg-zinc-100 text-zinc-700 border-zinc-200",
+  };
+}
+
+function groupPersonaFeedback(items: PersonaFeedback[]): Array<{ key: string; label: string; url: string; rows: PersonaFeedback[] }> {
+  const grouped = new Map<string, { key: string; label: string; url: string; rows: PersonaFeedback[] }>();
+  for (const item of items) {
+    const key = item.competitor_id;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        key,
+        label: item.competitor_name || item.url || "Unknown competitor",
+        url: item.url,
+        rows: [],
+      });
+    }
+    grouped.get(key)!.rows.push(item);
+  }
+  const order = ["elderly", "new_user", "frustrated", "enthusiast"];
+  return Array.from(grouped.values())
+    .map((group) => ({
+      ...group,
+      rows: [...group.rows].sort(
+        (a, b) =>
+          (order.indexOf(a.persona) === -1 ? 999 : order.indexOf(a.persona)) -
+          (order.indexOf(b.persona) === -1 ? 999 : order.indexOf(b.persona))
+      ),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
 
 const POSITIVE_WORDS = new Set([
   "love", "best", "great", "amazing", "recommend", "excellent", "good", "fantastic", "wonderful",
@@ -134,6 +207,7 @@ interface AnalyticsTabProps {
   companyId?: string;
   rankings?: RankingItem[];
   aggregatedFeedback?: AggregatedFeedback[];
+  personaFeedback?: PersonaFeedback[];
   reviewItems?: ReviewItem[];
   socialItems?: SocialItem[];
   companyName?: string;
@@ -143,11 +217,13 @@ export default function AnalyticsTab({
   companyId,
   rankings = [],
   aggregatedFeedback = [],
+  personaFeedback = [],
   reviewItems = [],
   socialItems = [],
   companyName = "",
 }: AnalyticsTabProps) {
   const socialSourceRows = postsBySource(socialItems);
+  const personaGroups = groupPersonaFeedback(personaFeedback);
   const samplePosts = socialItems.slice(0, 8);
   const socialFeedback = deriveSocialFeedback(socialItems, companyName);
   const socialFeedbackCard: UXFeedback | null =
@@ -165,6 +241,8 @@ export default function AnalyticsTab({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const [personaSlideByGroup, setPersonaSlideByGroup] = useState<Record<string, number>>({});
+  const [selectedGroupKey, setSelectedGroupKey] = useState<string>("");
   const checkScroll = useCallback(() => {
     if (!scrollRef.current) return;
     const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
@@ -176,6 +254,13 @@ export default function AnalyticsTab({
     const width = scrollRef.current.clientWidth;
     scrollRef.current.scrollBy({ left: direction === "left" ? -width : width, behavior: "smooth" });
     setTimeout(checkScroll, 350);
+  };
+  const slidePersona = (groupKey: string, direction: "left" | "right", max: number) => {
+    setPersonaSlideByGroup((prev) => {
+      const current = prev[groupKey] ?? 0;
+      const next = direction === "left" ? Math.max(0, current - 1) : Math.min(max - 1, current + 1);
+      return { ...prev, [groupKey]: next };
+    });
   };
   useEffect(() => {
     const t = setTimeout(checkScroll, 100);
@@ -196,6 +281,15 @@ export default function AnalyticsTab({
     });
     return () => { cancelled = true; };
   }, [companyId]);
+  useEffect(() => {
+    if (personaGroups.length === 0) {
+      setSelectedGroupKey("");
+      return;
+    }
+    if (!selectedGroupKey || !personaGroups.some((g) => g.key === selectedGroupKey)) {
+      setSelectedGroupKey(personaGroups[0].key);
+    }
+  }, [personaGroups, selectedGroupKey]);
 
   const uxFeedback: UXFeedback[] = aggregatedFeedback.length > 0
     ? aggregatedFeedback.map(aggregatedToUXFeedback)
@@ -204,6 +298,7 @@ export default function AnalyticsTab({
   const yelpItems = reviewItems.filter((r) => r.source === "yelp");
   const googleReviewData = reviewItemsToCompanyReviews("google", googleItems);
   const yelpReviewData = reviewItemsToCompanyReviews("yelp", yelpItems);
+  const selectedGroup = personaGroups.find((g) => g.key === selectedGroupKey) || null;
 
   return (
     <div>
@@ -238,6 +333,152 @@ export default function AnalyticsTab({
               )}
             </div>
           </div>
+        </div>
+      </motion.section>
+
+      <motion.section
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.08, duration: 0.35 }}
+        className="mb-8"
+      >
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-6 h-6 rounded-md bg-zinc-200 flex items-center justify-center">
+              <Bot size={13} className="text-zinc-600" />
+            </div>
+            <h2 className="text-[15px] font-semibold text-zinc-900">
+              Agent score derivation
+            </h2>
+          </div>
+          {personaGroups.length > 0 && (
+            <select
+              value={selectedGroupKey}
+              onChange={(e) => setSelectedGroupKey(e.target.value)}
+              className="min-w-[240px] px-3 py-2 rounded-lg border border-zinc-200 bg-white text-[13px] font-medium text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300"
+            >
+              {personaGroups.map((group) => (
+                <option key={group.key} value={group.key}>
+                  {group.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="bg-zinc-50/50 rounded-xl border border-zinc-200/60 p-4">
+          {personaGroups.length === 0 ? (
+            <p className="text-[13px] text-zinc-500 py-2">
+              No persona-level reasoning yet. Run site scrapers to see each agent personality and why it scored a site this way.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {selectedGroup && (
+                <div key={selectedGroup.key} className="bg-white rounded-xl border border-zinc-200 p-4">
+                  <div className="flex items-center justify-between mb-3 gap-4">
+                    <div>
+                      <p className="text-[15px] font-semibold text-zinc-900">{selectedGroup.label}</p>
+                      <p className="text-[12px] text-zinc-500">{selectedGroup.url}</p>
+                    </div>
+                    <a
+                      href={selectedGroup.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[12px] font-medium text-zinc-600 hover:text-zinc-900 inline-flex items-center gap-1"
+                    >
+                      Open site <ExternalLink size={10} />
+                    </a>
+                  </div>
+                  {(() => {
+                    const activeIdx = Math.min(
+                      personaSlideByGroup[selectedGroup.key] ?? 0,
+                      Math.max(selectedGroup.rows.length - 1, 0)
+                    );
+                    const row = selectedGroup.rows[activeIdx];
+                    if (!row) return null;
+                    return (
+                      <div className="rounded-lg border border-zinc-200 p-3 bg-zinc-50/60">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-[13px] font-semibold text-zinc-900">
+                              {PERSONA_LABELS[row.persona] || row.persona}
+                            </p>
+                            <p className="text-[12px] text-zinc-500 mt-0.5 line-clamp-2">{row.persona_description}</p>
+                          </div>
+                          <span className="text-[12px] font-semibold px-2 py-0.5 rounded-full border bg-white text-zinc-700 border-zinc-200">
+                            {row.rating_numeric.toFixed(1)}/10
+                          </span>
+                        </div>
+                        {selectedGroup.rows.length > 1 && (
+                          <div className="flex items-center justify-between mt-2">
+                            <p className="text-[11px] text-zinc-500">
+                              Behavior {activeIdx + 1} of {selectedGroup.rows.length}
+                            </p>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => slidePersona(selectedGroup.key, "left", selectedGroup.rows.length)}
+                                disabled={activeIdx === 0}
+                                className="w-6 h-6 rounded-full border border-zinc-200 bg-white flex items-center justify-center hover:bg-zinc-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                              >
+                                <ChevronLeft size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => slidePersona(selectedGroup.key, "right", selectedGroup.rows.length)}
+                                disabled={activeIdx >= selectedGroup.rows.length - 1}
+                                className="w-6 h-6 rounded-full border border-zinc-200 bg-white flex items-center justify-center hover:bg-zinc-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                              >
+                                <ChevronRight size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        <p className="text-[13px] text-zinc-700 mt-2 leading-snug">{row.summary || "No summary provided."}</p>
+
+                        <div className="mt-3">
+                          <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+                            Reasoning path
+                          </p>
+                          <div className="space-y-2">
+                          {row.derivation.map((step, idx) => (
+                            <div key={idx}>
+                              <div className="rounded-md border border-zinc-200 bg-white px-2.5 py-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+                                    Step {idx + 1}
+                                  </span>
+                                  <span className="text-[11px] text-zinc-400">
+                                    {STEP_TITLES[idx] || "Reasoning step"}
+                                  </span>
+                                </div>
+                                {(() => {
+                                  const tone = classifyStepTone(step, row.rating_numeric);
+                                  const chip = stepToneChip(tone);
+                                  return (
+                                    <span className={`inline-flex mt-1.5 text-[11px] font-medium px-1.5 py-0.5 rounded-full border ${chip.cls}`}>
+                                      {chip.label}
+                                    </span>
+                                  );
+                                })()}
+                                <p className="text-[13px] text-zinc-700 leading-snug mt-1">{step}</p>
+                              </div>
+                              {idx < row.derivation.length - 1 && (
+                                <div className="h-2 flex items-center justify-center">
+                                  <span className="w-px h-2 bg-zinc-300" />
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </motion.section>
 

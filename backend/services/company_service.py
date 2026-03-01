@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from agents.base import create_session, close_session
+from agents.outreach import RUNNERS as OUTREACH_RUNNERS
 from agents.reviews import RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS
 from agents.websites import PERSONAS, run_competitor_scrape_single_persona, run_competitor_search
@@ -24,6 +25,23 @@ REVIEW_SOURCES_ORDERED = ["google", "yelp"]
 
 
 DEFAULT_PROFILE_ID = os.getenv("BROWSER_USE_PROFILE_ID")
+
+LOGIC_DIMENSIONS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    ("clarity", ("clear", "readable", "simple", "intuitive", "understand"), ("confusing", "unclear", "hard to understand", "jargon")),
+    ("navigation", ("easy to navigate", "well organized", "find quickly", "structured"), ("hard to navigate", "buried", "lost", "too many steps")),
+    ("speed", ("fast", "quick", "snappy", "responsive"), ("slow", "lag", "delay", "long load")),
+    ("trust", ("trust", "credible", "secure", "professional", "social proof", "reviews"), ("sketchy", "no trust", "suspicious", "unreliable")),
+    ("cta", ("clear call to action", "easy checkout", "easy signup", "strong cta"), ("weak cta", "no cta", "unclear next step", "friction")),
+    ("content", ("helpful", "detailed", "useful info", "benefits"), ("vague", "missing info", "thin content", "incomplete")),
+    ("pricing", ("transparent pricing", "clear pricing", "value"), ("overpriced", "unclear pricing", "hidden fees")),
+]
+
+PERSONA_PRIORITY: dict[str, tuple[str, ...]] = {
+    "elderly": ("clarity", "navigation", "trust"),
+    "new_user": ("clarity", "content", "cta"),
+    "frustrated": ("speed", "navigation", "cta"),
+    "enthusiast": ("speed", "content", "trust"),
+}
 
 
 def _parse_rating(r: str) -> float:
@@ -45,6 +63,79 @@ def _parse_rating(r: str) -> float:
     if "low" in r:
         return 2.0
     return 5.0
+
+
+def _extract_dimension_scores(summary: str, pros: list[str], cons: list[str]) -> dict[str, dict[str, int]]:
+    merged = " ".join([summary] + pros + cons).lower()
+    scores: dict[str, dict[str, int]] = {}
+    for name, pos_terms, neg_terms in LOGIC_DIMENSIONS:
+        pos = sum(1 for t in pos_terms if t in merged)
+        neg = sum(1 for t in neg_terms if t in merged)
+        # Bias toward explicit pros/cons if keyword misses.
+        if not pos and not neg:
+            if any(name in p.lower() for p in pros):
+                pos += 1
+            if any(name in c.lower() for c in cons):
+                neg += 1
+        scores[name] = {"pos": pos, "neg": neg}
+    return scores
+
+
+def _format_dimension_list(scores: dict[str, dict[str, int]], mode: str, top_n: int = 3) -> str:
+    keyed: list[tuple[str, int]] = []
+    for dim, vals in scores.items():
+        val = vals["pos"] if mode == "pos" else vals["neg"]
+        if val > 0:
+            keyed.append((dim, val))
+    keyed.sort(key=lambda x: -x[1])
+    if not keyed:
+        return "none detected"
+    return ", ".join(f"{k} ({v})" for k, v in keyed[:top_n])
+
+
+def _build_derivation_steps(
+    persona: str,
+    rating_raw: str,
+    rating_numeric: float,
+    summary: str,
+    pros: list[str],
+    cons: list[str],
+) -> list[str]:
+    scores = _extract_dimension_scores(summary, pros, cons)
+    pos_total = sum(v["pos"] for v in scores.values())
+    neg_total = sum(v["neg"] for v in scores.values())
+    priorities = PERSONA_PRIORITY.get(persona, ())
+    persona_pos = sum(scores.get(p, {}).get("pos", 0) for p in priorities)
+    persona_neg = sum(scores.get(p, {}).get("neg", 0) for p in priorities)
+
+    pos_dims = _format_dimension_list(scores, "pos")
+    neg_dims = _format_dimension_list(scores, "neg")
+    top_pro = pros[0] if pros else "No explicit positive quote captured"
+    top_con = cons[0] if cons else "No explicit concern quote captured"
+    summary_short = summary[:200] if summary else "No summary text captured"
+
+    if persona_pos > persona_neg:
+        lens = "persona-critical dimensions skew positive"
+    elif persona_neg > persona_pos:
+        lens = "persona-critical dimensions skew negative"
+    else:
+        lens = "persona-critical dimensions are mixed/neutral"
+
+    if rating_numeric >= 8:
+        score_band = "high-conviction buy intent"
+    elif rating_numeric >= 6:
+        score_band = "moderate buy intent"
+    elif rating_numeric >= 4:
+        score_band = "hesitant buy intent"
+    else:
+        score_band = "low buy intent"
+
+    return [
+        f"UI signal extraction from summary/pros/cons: positive={pos_dims}; negative={neg_dims}.",
+        f"Persona lens ({persona.replace('_', ' ')}): {lens} (priority signals +{persona_pos}/-{persona_neg}).",
+        f"Score normalization: model returned {rating_raw or 'unrated'}, parsed to {rating_numeric}/10 -> {score_band}; global signal balance +{pos_total}/-{neg_total}.",
+        f"Conclusion evidence: strongest positive \"{top_pro}\"; strongest concern \"{top_con}\"; summary context \"{summary_short}\".",
+    ]
 
 
 async def run_four_personas_for_competitor(
@@ -393,6 +484,66 @@ async def run_reviews_for_all_places(
     logger.info("run_reviews_for_all_places: finished all %d places", len(place_queries))
 
 
+async def run_outreach_for_company(
+    company_id: str,
+    competitor_handle: str,
+    sources: list[str],
+    company_name: str,
+    company_market: str,
+    limit: int = 20,
+    profile_id: str | None = None,
+) -> None:
+    """Run outreach agents (scrape followers + send DMs) in parallel; create scrape_runs and persist to outreach_items."""
+    supabase = get_supabase_admin()
+    rows = [
+        {"company_id": company_id, "type": "outreach", "status": "running", "metadata": {"source": s, "competitor_handle": competitor_handle}}
+        for s in sources
+    ]
+    insert_result = supabase.table("scrape_runs").insert(rows).execute()
+    run_ids = [r["id"] for r in (insert_result.data or [])] if insert_result.data else []
+    if len(run_ids) != len(sources):
+        logger.warning("run_outreach_for_company: failed to create %d run rows for company_id=%s", len(sources), company_id)
+        return
+
+    async def run_one(run_id: str, source: str) -> None:
+        logger.info("run_outreach_for_company: %s starting for company_id=%s handle=%s", source, company_id, competitor_handle)
+        session_id, live_url = await create_session(profile_id)
+        supabase.table("scrape_runs").update({"live_url": live_url}).eq("id", run_id).execute()
+        try:
+            runner = OUTREACH_RUNNERS[source]
+            out, _ = await runner(
+                competitor_handle, company_name, company_market,
+                limit=limit, profile_id=profile_id, session_id=session_id, live_url=live_url,
+            )
+            if out and out.results:
+                for item in out.results:
+                    supabase.table("outreach_items").insert({
+                        "company_id": company_id,
+                        "source": source,
+                        "competitor_handle": competitor_handle,
+                        "username": (item.username or "")[:500],
+                        "display_name": (item.display_name or "")[:500],
+                        "bio": (item.bio or "")[:2000],
+                        "dm_sent": item.dm_sent,
+                        "dm_text": (item.dm_text or "")[:2000],
+                    }).execute()
+            supabase.table("scrape_runs").update({
+                "status": "done",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+            logger.info("run_outreach_for_company: %s done for company_id=%s", source, company_id)
+        except Exception as e:
+            logger.warning("run_outreach_for_company: %s failed for company_id=%s: %s", source, company_id, e)
+            supabase.table("scrape_runs").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run_id).execute()
+
+    await asyncio.gather(*[run_one(run_ids[i], sources[i]) for i in range(len(sources))])
+    logger.info("run_outreach_for_company: all %d sources finished for company_id=%s", len(sources), company_id)
+
+
 def aggregate_most_frequent_pros_cons(pros_cons_list: list[list[str]], top_n: int = 5) -> list[str]:
     """From list of pro/con lists from each scraper, return the most frequently mentioned (top_n)."""
     combined: list[str] = []
@@ -474,3 +625,86 @@ def get_aggregated_feedback_for_company(supabase, company_id: str) -> list[dict[
             "run_count": len(rows),
         })
     return result
+
+
+def get_persona_feedback_for_company(supabase, company_id: str) -> list[dict[str, Any]]:
+    """
+    Return latest site feedback per (competitor, persona), including a transparent derivation
+    trail so the UI can explain why a persona gave a certain score.
+    """
+    runs = (
+        supabase.table("scrape_runs")
+        .select("id, competitor_id, started_at")
+        .eq("company_id", company_id)
+        .eq("type", "site")
+        .order("started_at", desc=True)
+        .execute()
+    )
+    run_rows = runs.data or []
+    if not run_rows:
+        return []
+
+    run_ids = [r["id"] for r in run_rows]
+    run_rank = {str(r["id"]): idx for idx, r in enumerate(run_rows)}
+    run_competitor = {str(r["id"]): str(r["competitor_id"]) if r.get("competitor_id") else None for r in run_rows}
+
+    competitors = supabase.table("competitors").select("id, url, name").eq("company_id", company_id).execute()
+    comp_map = {str(c["id"]): c for c in (competitors.data or [])}
+
+    feedback = (
+        supabase.table("site_feedback")
+        .select("run_id, competitor_id, url, persona, rating_compelled_to_buy, summary, pros, cons")
+        .in_("run_id", run_ids)
+        .execute()
+    )
+    rows = feedback.data or []
+    # Newest run first, so first seen per (competitor, persona) is the latest one.
+    rows.sort(key=lambda r: run_rank.get(str(r.get("run_id")), 10**9))
+
+    latest_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        run_id = str(row.get("run_id"))
+        comp_id = str(row.get("competitor_id") or run_competitor.get(run_id) or "")
+        persona = str(row.get("persona") or "").strip() or "unknown"
+        if not comp_id:
+            continue
+        key = (comp_id, persona)
+        if key in latest_by_key:
+            continue
+        latest_by_key[key] = row
+
+    out: list[dict[str, Any]] = []
+    for (comp_id, persona), row in latest_by_key.items():
+        rating_raw = str(row.get("rating_compelled_to_buy") or "")
+        rating_numeric = round(_parse_rating(rating_raw), 1)
+        summary = str(row.get("summary") or "").strip()
+        pros = [p for p in (row.get("pros") or []) if isinstance(p, str) and p.strip()]
+        cons = [c for c in (row.get("cons") or []) if isinstance(c, str) and c.strip()]
+        persona_desc = PERSONAS.get(persona, persona.replace("_", " ").capitalize())
+        comp = comp_map.get(comp_id, {})
+
+        derivation = _build_derivation_steps(
+            persona=persona,
+            rating_raw=rating_raw,
+            rating_numeric=rating_numeric,
+            summary=summary,
+            pros=pros,
+            cons=cons,
+        )
+
+        out.append({
+            "competitor_id": comp_id,
+            "url": row.get("url") or comp.get("url", ""),
+            "competitor_name": comp.get("name"),
+            "persona": persona,
+            "persona_description": persona_desc,
+            "rating_raw": rating_raw,
+            "rating_numeric": rating_numeric,
+            "summary": summary,
+            "pros": pros,
+            "cons": cons,
+            "derivation": derivation,
+        })
+
+    out.sort(key=lambda x: (x.get("competitor_name") or x.get("url") or "", x.get("persona") or ""))
+    return out

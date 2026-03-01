@@ -23,7 +23,7 @@ export default function SignupPage() {
         setError(err.message);
         return;
       }
-      router.push("/");
+      router.push("/companies");
       router.refresh();
     } finally {
       setLoading(false);
@@ -31,9 +31,9 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#fafafa] flex items-center justify-center px-4">
-      <div className="w-full max-w-[360px]">
-        <div className="flex items-center gap-3 mb-8">
+    <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-zinc-100 flex items-center justify-center px-4">
+      <div className="w-full max-w-[380px] bg-white/80 backdrop-blur-sm rounded-2xl border border-zinc-200/80 shadow-xl shadow-zinc-200/50 p-8">
+        <Link href="/" className="flex items-center gap-3 mb-8 w-fit">
           <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3" />
@@ -41,7 +41,7 @@ export default function SignupPage() {
             </svg>
           </div>
           <span className="text-lg font-semibold tracking-tight">limitus</span>
-        </div>
+        </Link>
         <h1 className="text-xl font-bold text-zinc-900 mb-1">Create account</h1>
         <p className="text-[13px] text-zinc-500 mb-6">Enter your email and a password to sign up.</p>
         <form onSubmit={handleSubmit} className="space-y-4">

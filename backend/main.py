@@ -25,11 +25,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from agents.base import create_session, close_session
+from agents.base import create_session
+from agents.outreach import OUTREACH_SOURCES, RUNNERS as OUTREACH_RUNNERS
 from agents.reviews import REVIEW_SOURCES, RUNNERS as REVIEW_RUNNERS
 from agents.social import RUNNERS as SOCIAL_RUNNERS, SOCIAL_SOURCES
 from agents.websites import run_competitor_search
 from db import get_current_user_id, get_supabase_admin
-from schemas.requests import CompanyCreateRequest, ReviewsScrapeRequest, SocialScrapeRequest, WebsitesScrapeRequest
+from schemas.requests import CompanyCreateRequest, OutreachRequest, ReviewsScrapeRequest, SocialScrapeRequest, WebsitesScrapeRequest
 from schemas.responses import (
     AggregatedFeedback,
     CompanyDetailResponse,
@@ -41,6 +43,8 @@ from schemas.responses import (
     PostQualityAnalysisItem,
     PostQualityInsightsResponse,
     PostingGuideResponse,
+    OutreachResponse,
+    PersonaFeedbackResponse,
     RankingItem,
     ReviewsScrapeResponse,
     ScrapeRunResponse,
@@ -50,9 +54,11 @@ from schemas.responses import (
 )
 from services.company_service import (
     get_aggregated_feedback_for_company,
+    get_persona_feedback_for_company,
     get_rankings_for_company,
     run_company_scrapes_parallel,
     run_four_personas_for_competitor,
+    run_outreach_for_company,
     run_reviews_for_all_places,
     run_social_for_company,
 )
@@ -329,6 +335,50 @@ async def scrape_websites(body: WebsitesScrapeRequest) -> WebsitesScrapeResponse
     return WebsitesScrapeResponse(results=results, live_urls=live_urls, errors=errors)
 
 
+@app.post("/scrape/outreach", response_model=OutreachResponse)
+async def scrape_outreach(body: OutreachRequest) -> OutreachResponse:
+    """Scrape competitor followers and send personalized DMs (X, Instagram, Facebook) in parallel."""
+    invalid = set(body.sources) - OUTREACH_SOURCES
+    if invalid:
+        raise HTTPException(422, detail=f"Invalid sources: {invalid}. Allowed: {list(OUTREACH_SOURCES)}")
+    if not body.sources:
+        raise HTTPException(422, detail="At least one source required")
+
+    profile = _profile_id(body.profile_id)
+
+    async def run_one(source: str):
+        runner = OUTREACH_RUNNERS[source]
+        try:
+            out, live_url = await runner(
+                body.competitor_handle, body.company_name, body.company_market,
+                limit=body.limit, profile_id=profile,
+            )
+            results = out.model_dump()["results"] if out else []
+            return source, results, live_url or "", None
+        except Exception as e:
+            return source, [], "", str(e)
+
+    tasks = [run_one(s) for s in body.sources]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results: dict[str, list[dict[str, Any]]] = {}
+    live_urls: dict[str, str] = {}
+    errors: dict[str, str] = {}
+
+    for item in outcomes:
+        if isinstance(item, Exception):
+            errors["_"] = str(item)
+            continue
+        source, res, live, err = item
+        results[source] = res
+        if live:
+            live_urls[source] = live
+        if err:
+            errors[source] = err
+
+    return OutreachResponse(results=results, live_urls=live_urls, errors=errors)
+
+
 # ---------- Authenticated company APIs ----------
 
 
@@ -504,6 +554,7 @@ async def get_company(
 
     aggregated_feedback = get_aggregated_feedback_for_company(supabase, company_id)
     rankings = get_rankings_for_company(supabase, company_id)
+    persona_feedback = get_persona_feedback_for_company(supabase, company_id)
 
     review_rows = supabase.table("review_items").select("*").eq("company_id", company_id).execute()
     review_items = [dict(r) for r in (review_rows.data or [])]
@@ -514,14 +565,128 @@ async def get_company(
     social_rows = supabase.table("social_items").select("*").eq("company_id", company_id).execute()
     social_items = [dict(s) for s in (social_rows.data or [])]
 
+    try:
+        outreach_rows = supabase.table("outreach_items").select("*").eq("company_id", company_id).execute()
+        outreach_items = [dict(o) for o in (outreach_rows.data or [])]
+    except APIError:
+        outreach_items = []
+
     return CompanyDetailResponse(
         company=company,
         competitors=[CompetitorResponse(**c) for c in competitor_list],
         aggregated_feedback=[AggregatedFeedback(**f) for f in aggregated_feedback],
         rankings=[RankingItem(**r) for r in rankings],
+        persona_feedback=[PersonaFeedbackResponse(**p) for p in persona_feedback],
         review_items=review_items,
         social_items=social_items,
+        outreach_items=outreach_items,
     )
+
+
+@app.get("/companies/{company_id}/post-quality-insights", response_model=PostQualityInsightsResponse)
+async def get_post_quality_insights(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """
+    Return rubric-based post quality analyses for this company (for AI drafting agents).
+    Runs analysis if social_items exist but analyses are missing. Scores: Hook 25, Emotion 20, Format 20, Timing 20, CTA 15.
+    """
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    social_rows = supabase.table("social_items").select("id").eq("company_id", company_id).execute()
+    n_social = len(social_rows.data or [])
+    existing_rows = supabase.table("post_quality_analyses").select("id").eq("company_id", company_id).execute()
+    n_analyses = len(existing_rows.data or [])
+    if n_social > 0 and n_analyses < n_social:
+        analyze_and_store_for_company(company_id)
+    rows = supabase.table("post_quality_analyses").select("*").eq("company_id", company_id).order("total_score", desc=True).execute()
+    data = rows.data or []
+    analyses = []
+    scores = []
+    for r in data:
+        scores.append(r.get("total_score") or 0)
+        analyses.append(PostQualityAnalysisItem(
+            id=str(r["id"]),
+            company_id=str(r["company_id"]),
+            social_item_id=str(r["social_item_id"]) if r.get("social_item_id") else None,
+            source=r.get("source") or "",
+            post_type=r.get("post_type"),
+            hook_strength=r.get("hook_strength"),
+            emotion_match=r.get("emotion_match"),
+            format_fit=r.get("format_fit"),
+            timing_score=r.get("timing_score"),
+            cta_clarity=r.get("cta_clarity"),
+            total_score=r.get("total_score"),
+            signals=r.get("signals") or {},
+            raw_snippet=r.get("raw_snippet"),
+        ))
+    avg = sum(scores) / len(scores) if scores else 0
+    rubric_summary = {
+        "total_posts_analyzed": len(analyses),
+        "average_score": round(avg, 1),
+        "score_bands": {"excellent_80_100": sum(1 for s in scores if s >= 80), "good_60_79": sum(1 for s in scores if 60 <= s < 80), "average_40_59": sum(1 for s in scores if 40 <= s < 60), "weak_below_40": sum(1 for s in scores if s < 40)},
+        "rubric_weights": {"hook_strength": 25, "emotion_match": 20, "format_fit": 20, "timing_score": 20, "cta_clarity": 15},
+    }
+    return PostQualityInsightsResponse(analyses=analyses, rubric_summary=rubric_summary)
+
+
+@app.get("/companies/{company_id}/posting-guide", response_model=PostingGuideResponse)
+async def get_posting_guide(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Guide for how to make a good post in your market, from post quality analyses. Includes best times and rubric tips."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    row = comp.data[0]
+    company_name = (row.get("name") or "Company").strip()
+    market = (row.get("market") or "").strip()
+    # Ensure we have analyses if social data exists
+    from services.post_quality import analyze_and_store_for_company
+    analyze_and_store_for_company(company_id)
+    guide = build_posting_guide(supabase, company_id, company_name, market)
+    return PostingGuideResponse(**guide)
+
+
+@app.get("/companies/{company_id}/future-steps", response_model=FutureStepsResponse)
+async def get_future_steps(
+    company_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Generate actionable future steps from scraped data (rankings, feedback, reviews, social, posting guide) via Anthropic."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market, location").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    row = comp.data[0]
+    company_name = (row.get("name") or "Company").strip()
+    market = (row.get("market") or "").strip()
+
+    competitors = supabase.table("competitors").select("id, url, name").eq("company_id", company_id).execute()
+    competitor_list = [{"id": str(c["id"]), "url": c["url"], "name": c.get("name")} for c in (competitors.data or [])]
+    aggregated_feedback = get_aggregated_feedback_for_company(supabase, company_id)
+    rankings = get_rankings_for_company(supabase, company_id)
+    review_rows = supabase.table("review_items").select("*").eq("company_id", company_id).execute()
+    review_items = [dict(r) for r in (review_rows.data or [])]
+    social_rows = supabase.table("social_items").select("*").eq("company_id", company_id).execute()
+    social_items = [dict(s) for s in (social_rows.data or [])]
+
+    detail = {
+        "company": {"id": company_id, "name": company_name, "market": market, "location": row.get("location") or ""},
+        "competitors": competitor_list,
+        "aggregated_feedback": aggregated_feedback,
+        "rankings": rankings,
+        "review_items": review_items,
+        "social_items": social_items,
+    }
+    posting_guide = build_posting_guide(supabase, company_id, company_name, market)
+    steps = await generate_future_steps(detail, posting_guide)
+    return FutureStepsResponse(steps=[FutureStepItem(**s) for s in steps])
 
 
 @app.get("/companies/{company_id}/post-quality-insights", response_model=PostQualityInsightsResponse)
@@ -679,6 +844,30 @@ async def list_company_runs(
         for r in run_list
     ]
     return ScrapeRunsListResponse(runs=run_responses, agents_running_count=agents_running)
+
+
+@app.post("/companies/{company_id}/outreach")
+async def start_outreach(
+    company_id: str,
+    body: OutreachRequest,
+    background_tasks: BackgroundTasks,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Start outreach (follower DMs) for a company. Runs in background."""
+    supabase = get_supabase_admin()
+    comp = supabase.table("companies").select("id, name, market").eq("id", company_id).eq("user_id", user_id).execute()
+    if not comp.data or len(comp.data) == 0:
+        raise HTTPException(404, detail="Company not found")
+    company = comp.data[0]
+    company_name = body.company_name or company.get("name", "")
+    company_market = body.company_market or company.get("market", "")
+    profile = _profile_id(body.profile_id)
+    background_tasks.add_task(
+        run_outreach_for_company,
+        company_id, body.competitor_handle, body.sources,
+        company_name, company_market, body.limit, profile,
+    )
+    return {"ok": True, "message": f"Outreach started for {len(body.sources)} source(s)"}
 
 
 def _enqueue_rescrape_for_companies(
